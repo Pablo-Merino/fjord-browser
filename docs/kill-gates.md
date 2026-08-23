@@ -109,7 +109,7 @@ tab content.
 
 ### Question
 
-Can WPE DMA-BUF frames be imported and presented by GPUI/Blade without a CPU
+Can WPE DMA-BUF frames be imported and presented by GPUI/WGPU without a CPU
 readback or a broad GPUI fork?
 
 ### Entry Conditions

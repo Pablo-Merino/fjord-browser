@@ -46,9 +46,18 @@ container. UI and behavior iterations run under a headless Wayland compositor.
 Testing on the Omarchy laptop is deferred until hardware-specific DMA-BUF,
 i915, Hyprland, fcitx, and portal behavior must be verified.
 
-The application has not been scaffolded yet. Build instructions will be added
-after the technical kill gates establish the final dependency and renderer
-shape.
+Build and verify the initial workspace through the container:
+
+```sh
+./scripts/dev.sh image
+./scripts/dev.sh verify
+./scripts/dev.sh headless-smoke
+```
+
+The image pins its Arch base, package snapshot, WPE WebKit 2.52.6, Rust 1.97.1,
+and the GPUI/Zed revision recorded in the kill gates. `headless-smoke` captures
+a blank Sway frame to prove the local Wayland screenshot loop before browser UI
+is added.
 
 ## Screenshots
 

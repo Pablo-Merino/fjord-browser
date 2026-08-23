@@ -74,7 +74,7 @@ Dedicated GLib/WPE thread
 └── DMA-BUF frame production
              │
              ▼
-GPUI/Blade external-texture primitive
+GPUI/WGPU external-texture primitive
 ```
 
 WPE and GObject values stay on the WPE thread. GPUI receives browser-facing
