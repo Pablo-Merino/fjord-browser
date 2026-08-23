@@ -66,6 +66,11 @@ and the GPUI/Zed revision recorded in the kill gates. `headless-smoke` captures
 a blank Sway frame to prove the local Wayland screenshot loop before browser UI
 is added.
 
+`./scripts/dev.sh wpe-smoke` runs the Gate 1 WPE lifecycle test and saves its
+report under `artifacts/screenshots/runs/gate1/`. It uses a privileged outer
+Docker container only because Docker's default confinement blocks nested
+Bubblewrap namespaces; WebKit's own sandbox remains enabled for the test.
+
 ## Screenshots
 
 Runtime captures belong in [`artifacts/screenshots/`](artifacts/screenshots/).

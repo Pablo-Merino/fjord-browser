@@ -1,0 +1,51 @@
+#ifndef FJORD_WPE_SMOKE_H
+#define FJORD_WPE_SMOKE_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct {
+    bool committed;
+    bool finished;
+    bool title_changed;
+    bool uri_changed;
+    bool buffers_changed;
+    bool buffer_rendered;
+    bool buffer_released;
+    bool web_process_terminated;
+    bool sandbox_tools_available;
+    bool sandbox_verified;
+    bool explicit_sync;
+    bool dma_buf_advertised;
+    int32_t termination_reason;
+    uint32_t platform_major;
+    uint32_t platform_minor;
+    uint32_t platform_micro;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t stride;
+    uint32_t planes;
+    uint32_t preferred_format;
+    uint32_t preferred_format_count;
+    uint64_t modifier;
+    uint64_t preferred_modifier;
+    char buffer_kind[16];
+    char primary_node[96];
+    char render_node[96];
+} FjordWpeSmokeReport;
+
+int fjord_wpe_smoke_run(
+    const char *data_directory,
+    const char *cache_directory,
+    const char *uri,
+    FjordWpeSmokeReport *report,
+    char **error_message
+);
+
+void fjord_wpe_smoke_free_error(char *error_message);
+
+size_t fjord_wpe_smoke_report_size(void);
+
+#endif

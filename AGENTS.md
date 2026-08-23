@@ -47,6 +47,9 @@ deferred work may enter scope.
 
 - Use `./scripts/dev.sh` so builds run in the pinned Arch environment.
 - Run `./scripts/dev.sh verify` before reporting Rust changes complete.
+- The Gate 1 WPE commands (`wpe-smoke`, `wpe-smoke-network`, and `wpe-stress`)
+  use a privileged outer Docker container only to verify WPE's nested Bubblewrap
+  sandbox. Do not generalize that exception.
 - Prefer headless Wayland checks and repository-local screenshots; defer laptop
   tests until a gate specifically requires i915, Hyprland, fcitx, or portals.
 - Keep routine captures in `artifacts/screenshots/runs/` and commit only reviewed

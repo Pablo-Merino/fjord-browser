@@ -22,20 +22,37 @@ ensure_image() {
     fi
 }
 
-run() {
+run_container() {
+    local needs_wpe_sandbox=$1
+    shift
     ensure_image
 
     local tty=()
+    local security=(--security-opt seccomp=unconfined --security-opt apparmor=unconfined)
     if [[ -t 0 && -t 1 ]]; then
         tty=(-it)
     fi
 
-    docker run --rm --init "${tty[@]}" \
+    if [[ $needs_wpe_sandbox == true ]]; then
+        security=(--privileged)
+    fi
+
+    docker run --rm --init "${tty[@]}" "${security[@]}" \
         --shm-size=1g \
+        --security-opt seccomp=unconfined \
+        --security-opt apparmor=unconfined \
         --volume "$ROOT:/workspace" \
         --volume "$CARGO_VOLUME:/home/fjord/.cargo" \
         --workdir /workspace \
         "$IMAGE" "$@"
+}
+
+run() {
+    run_container false "$@"
+}
+
+run_wpe() {
+    run_container true "$@"
 }
 
 command=${1:-help}
@@ -50,6 +67,9 @@ case "$command" in
     clippy) run cargo clippy --workspace --locked --all-targets -- -D warnings ;;
     verify) run bash scripts/verify.sh ;;
     headless-smoke) run bash scripts/headless-smoke.sh ;;
+    wpe-smoke) run_wpe bash scripts/wpe-smoke.sh ;;
+    wpe-smoke-network) run_wpe bash scripts/wpe-smoke.sh --network ;;
+    wpe-stress) run_wpe bash scripts/wpe-stress.sh ;;
     run) run "$@" ;;
     *)
         cat <<'EOF'
@@ -64,6 +84,9 @@ Commands:
   clippy          Run Clippy with warnings denied
   verify          Run all static and test checks
   headless-smoke  Start headless Sway and capture a blank compositor frame
+  wpe-smoke       Run the sandboxed standalone WPE lifecycle smoke test
+  wpe-smoke-network  Run the WPE lifecycle smoke test against example.com
+  wpe-stress       Repeat the standalone WPE lifecycle test in fresh processes
   run <command>   Run an arbitrary command in the development image
 EOF
         ;;
