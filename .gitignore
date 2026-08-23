@@ -1,0 +1,6 @@
+.codegraph/
+.agents/
+.claude/
+skills-lock.json
+target/
+artifacts/screenshots/runs/
