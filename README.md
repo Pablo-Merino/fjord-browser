@@ -16,6 +16,13 @@ must prove that GPUI and WPE WebKit can share a Wayland application with
 zero-copy GPU composition and correct input routing. Product development stops
 if that architecture requires broad compositor or framework hacks.
 
+## Development Transparency
+
+Fjord is designed and implemented with agentic AI systems operating under
+human direction and review. AI-generated work is not assumed correct: changes
+must satisfy the same project checks, review standards, and technical kill
+gates as any other contribution. Fjord does not require AI at runtime.
+
 ## Planned Alpha
 
 - Native GPUI chrome with a full-height vertical tab sidebar
