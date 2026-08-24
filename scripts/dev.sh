@@ -89,7 +89,7 @@ run_wpe_hardware() {
 }
 
 run_gui() {
-    run_container false true true "$@"
+    run_container true true true "$@"
 }
 
 command=${1:-help}
