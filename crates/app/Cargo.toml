@@ -14,6 +14,7 @@ workspace = true
 fjord-webkit = { path = "../webkit" }
 # Compile the pinned GPUI API and renderer now, before browser UI depends on it.
 gpui.workspace = true
+raw-window-handle = "0.6.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_platform = { workspace = true, features = ["wayland"] }

@@ -219,3 +219,18 @@ without a frame.
 **Next:** Use any active Linux GPU with a working DRM stack for the hardware
 gate. The GTX host cannot provide that evidence until its graphics driver and
 KMS access work.
+
+## 2026-08-24: GPUI Wayland Subsurface Protocol
+
+**Changed:** Added a stock-GPUI smoke window that extracts the native Wayland
+display and parent surface. The WPE boundary binds `wl_subcompositor`, creates a
+desynced child surface, sets an empty input region, commits it, and releases it.
+
+**Checks:** `dev.sh verify` passed locally. `dev.sh gpui-smoke` passed on
+Athena's Hyprland session without stalling GPUI's event loop.
+
+**Evidence:** Athena GPUI smoke output: `GPUI Wayland subsurface protocol
+ready`.
+
+**Next:** Attach a static dma-buf to the child surface and wait for
+`wl_buffer.release` before connecting live WPE frame ownership.

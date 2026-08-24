@@ -56,6 +56,8 @@ void fjord_wpe_smoke_free_error(char *error_message);
 
 void fjord_wpe_smoke_close_fds(FjordWpeSmokeReport *report);
 
+int fjord_wayland_subsurface_probe(void *display, void *parent_surface, char **error_message);
+
 size_t fjord_wpe_smoke_report_size(void);
 
 #endif

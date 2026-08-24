@@ -1507,6 +1507,7 @@ dependencies = [
  "fjord-webkit",
  "gpui",
  "gpui_platform",
+ "raw-window-handle",
 ]
 
 [[package]]

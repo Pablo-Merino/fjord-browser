@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <wpe/headless/wpe-headless.h>
 #include <wpe/webkit.h>
+#include <wayland-client-protocol.h>
 
 typedef struct {
     GMainContext *context;
@@ -44,6 +45,89 @@ static void reset_report(FjordWpeSmokeReport *report) {
     memset(report, 0, sizeof(*report));
     for (guint plane = 0; plane < G_N_ELEMENTS(report->dma_buf_fds); plane++)
         report->dma_buf_fds[plane] = -1;
+}
+
+typedef struct {
+    struct wl_compositor *compositor;
+    struct wl_subcompositor *subcompositor;
+} SubsurfaceProbe;
+
+static void subsurface_probe_global(
+    void *data,
+    struct wl_registry *registry,
+    uint32_t name,
+    const char *interface,
+    uint32_t version
+) {
+    SubsurfaceProbe *probe = data;
+
+    if (!g_strcmp0(interface, "wl_compositor"))
+        probe->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, MIN(version, 4));
+    else if (!g_strcmp0(interface, "wl_subcompositor"))
+        probe->subcompositor = wl_registry_bind(registry, name, &wl_subcompositor_interface, 1);
+}
+
+static void subsurface_probe_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
+    (void)data;
+    (void)registry;
+    (void)name;
+}
+
+static const struct wl_registry_listener subsurface_probe_registry_listener = {
+    .global = subsurface_probe_global,
+    .global_remove = subsurface_probe_global_remove,
+};
+
+int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, char **error_message) {
+    struct wl_display *display = display_ptr;
+    struct wl_surface *parent_surface = parent_surface_ptr;
+    struct wl_registry *registry;
+    struct wl_surface *surface = NULL;
+    struct wl_subsurface *subsurface = NULL;
+    struct wl_region *empty_input_region = NULL;
+    SubsurfaceProbe probe = { 0 };
+
+    g_return_val_if_fail(display, 1);
+    g_return_val_if_fail(parent_surface, 1);
+    g_return_val_if_fail(error_message, 1);
+
+    *error_message = NULL;
+    registry = wl_display_get_registry(display);
+    wl_registry_add_listener(registry, &subsurface_probe_registry_listener, &probe);
+    if (wl_display_roundtrip(display) < 0 || !probe.compositor || !probe.subcompositor) {
+        *error_message = g_strdup("Wayland compositor does not support subsurfaces");
+        goto out;
+    }
+
+    surface = wl_compositor_create_surface(probe.compositor);
+    subsurface = wl_subcompositor_get_subsurface(probe.subcompositor, surface, parent_surface);
+    empty_input_region = wl_compositor_create_region(probe.compositor);
+    if (!surface || !subsurface || !empty_input_region) {
+        *error_message = g_strdup("failed to create Wayland subsurface");
+        goto out;
+    }
+    wl_surface_set_input_region(surface, empty_input_region);
+    wl_subsurface_set_desync(subsurface);
+    wl_surface_commit(surface);
+    wl_surface_commit(parent_surface);
+    if (wl_display_flush(display) < 0)
+        *error_message = g_strdup("failed to flush Wayland subsurface");
+
+out:
+    if (empty_input_region)
+        wl_region_destroy(empty_input_region);
+    if (subsurface)
+        wl_subsurface_destroy(subsurface);
+    if (surface)
+        wl_surface_destroy(surface);
+    if (probe.subcompositor)
+        wl_subcompositor_destroy(probe.subcompositor);
+    if (probe.compositor)
+        wl_compositor_destroy(probe.compositor);
+    if (registry)
+        wl_registry_destroy(registry);
+
+    return *error_message ? 1 : 0;
 }
 
 static void capture_buffer(SmokeState *state, WPEBuffer *buffer) {

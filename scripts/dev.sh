@@ -25,6 +25,8 @@ ensure_image() {
 run_container() {
     local needs_wpe_sandbox=$1
     local needs_dri=$2
+    local needs_wayland=$3
+    shift
     shift
     shift
     ensure_image
@@ -32,6 +34,8 @@ run_container() {
     local tty=()
     local devices=()
     local device_groups=()
+    local wayland_mount=()
+    local wayland_environment=()
     local security=(--security-opt seccomp=unconfined --security-opt apparmor=unconfined)
     if [[ -t 0 && -t 1 ]]; then
         tty=(-it)
@@ -51,8 +55,18 @@ run_container() {
             [[ " ${device_groups[*]} " == *" $group "* ]] || device_groups+=(--group-add "$group")
         done
     fi
+    if [[ $needs_wayland == true ]]; then
+        runtime_dir=${XDG_RUNTIME_DIR:-"/run/user/$(id -u)"}
+        sockets=("$runtime_dir"/wayland-*)
+        [[ -S ${sockets[0]} ]] || {
+            printf 'No Wayland socket is available\n' >&2
+            return 1
+        }
+        wayland_mount=(--volume "$runtime_dir:$runtime_dir")
+        wayland_environment=(--env "XDG_RUNTIME_DIR=$runtime_dir" --env "WAYLAND_DISPLAY=$(basename -- "${sockets[0]}")")
+    fi
 
-    docker run --rm --init "${tty[@]}" "${security[@]}" "${devices[@]}" "${device_groups[@]}" \
+    docker run --rm --init "${tty[@]}" "${security[@]}" "${devices[@]}" "${device_groups[@]}" "${wayland_mount[@]}" "${wayland_environment[@]}" \
         --shm-size=1g \
         --security-opt seccomp=unconfined \
         --security-opt apparmor=unconfined \
@@ -63,15 +77,19 @@ run_container() {
 }
 
 run() {
-    run_container false false "$@"
+    run_container false false false "$@"
 }
 
 run_wpe() {
-    run_container true false "$@"
+    run_container true false false "$@"
 }
 
 run_wpe_hardware() {
-    run_container true true "$@"
+    run_container true true false "$@"
+}
+
+run_gui() {
+    run_container false true true "$@"
 }
 
 command=${1:-help}
@@ -90,6 +108,7 @@ case "$command" in
     wpe-smoke-network) run_wpe bash scripts/wpe-smoke.sh --network ;;
     wpe-stress) run_wpe bash scripts/wpe-stress.sh ;;
     wpe-hardware) run_wpe_hardware bash scripts/wpe-hardware.sh ;;
+    gpui-smoke) run_gui cargo run -p fjord-app --locked ;;
     run) run "$@" ;;
     *)
         cat <<'EOF'
@@ -108,6 +127,7 @@ Commands:
     wpe-smoke-network  Run the WPE lifecycle smoke test against example.com
     wpe-stress      Repeat WPE view lifecycles in one process and check file descriptors
     wpe-hardware    Run the WPE lifecycle smoke test with direct DRM access
+    gpui-smoke      Start the GPUI Wayland handle smoke window
   run <command>   Run an arbitrary command in the development image
 EOF
         ;;
