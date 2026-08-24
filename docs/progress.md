@@ -195,3 +195,14 @@ Athena with `egl_imported=true` for the two-plane CCS dma-buf.
 **Next:** Add the approved narrow GPUI GLES renderer feature to sample the EGL
 image directly. Keep the Vulkan path out of scope because ANV lacks
 `VK_EXT_image_drm_format_modifier`.
+
+## 2026-08-24: Multi-GPU Zero-Copy Policy
+
+**Changed:** Replaced the i915-only GPU gate with a runtime-probed, multi-GPU
+policy. GPUI imports supported dma-bufs directly. Unsupported format and
+modifier combinations use a zero-copy WPE Wayland subsurface instead.
+
+**Why:** The browser must work on normal Linux GPUs, not only the i915 laptop.
+
+**Next:** Implement the runtime path probe and validate it on i915 and GTX
+1650.

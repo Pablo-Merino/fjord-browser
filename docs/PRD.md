@@ -91,8 +91,10 @@ only when there is a real reason to build it.
 
 ## Technical Decision
 
-Fjord must share web frames directly with the GPU. A permanent path through CPU
-memory is not acceptable. If direct sharing needs a large GPUI fork or complex
-compositor workaround, the project stops and reassesses the host architecture.
+Fjord must share web frames with the GPU without a permanent path through CPU
+memory. Direct GPUI import is preferred. A clean WPE Wayland subsurface is
+allowed when a GPU's format or modifier is unsupported by GPUI. If neither path
+works without a large GPUI fork or complex compositor workaround, the project
+stops and reassesses the host architecture.
 
 The exact tests and fallback options are in [kill-gates.md](kill-gates.md).

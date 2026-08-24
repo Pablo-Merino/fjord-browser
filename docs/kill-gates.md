@@ -10,7 +10,7 @@ is not enough. Each gate needs working behavior and saved evidence.
 | Browser interface | GPUI on Wayland |
 | Web engine | WPE WebKit 2.52.x from Arch Linux |
 | Build environment | Pinned Arch Linux container on the headless host |
-| Main test machine | Omarchy laptop with Intel i915 graphics and Hyprland |
+| Hardware test machines | Omarchy i915 laptop and GTX 1650 host |
 | Early UI tests | Headless Wayland with software graphics allowed |
 
 The progress log records the commands, results, and saved evidence. Exact
@@ -54,21 +54,29 @@ shipping renderer.
 
 ### Hardware Check
 
-**Question:** Can Fjord display WPE GPU frames directly on the i915 laptop?
+**Question:** Can Fjord display WPE GPU frames without CPU copies on normal
+Linux GPU stacks?
 
 It must:
 
-- Import WPE's GPU buffer into GPUI without a CPU copy.
-- Respect frame synchronization.
+- Probe WPE's actual format and modifier at startup.
+- Import the GPU buffer into GPUI without a CPU copy when the renderer supports
+  it.
+- Use a Wayland subsurface when direct import is unsupported. The compositor
+  must import the buffer without a CPU copy.
+- Respect the synchronization primitive available for the selected path.
 - Render correct size, colors, and transparency.
 - Switch three live views without stale content.
-- Keep the GPUI change limited to one small Linux renderer feature.
+- Keep any GPUI change limited to one small Linux renderer feature.
+- Exercise the i915 laptop and GTX 1650 host. Untested GPUs must use the
+  runtime probe and select a working zero-copy path instead of crashing.
 
-**Proof:** frame and synchronization counters, a reviewed screenshot, and a
-recorded i915/Hyprland run.
+**Proof:** frame and synchronization counters, reviewed screenshots, and
+recorded runs for each hardware test machine.
 
-**If it fails:** first fix the small GPU import path. Then consider a clean WPE
-Wayland subsurface. If neither works, stop and reconsider GPUI as the host.
+**If it fails:** first fix the small GPU import path. Then use a clean WPE
+Wayland subsurface for that GPU. If neither path works without a CPU copy, stop
+and reconsider GPUI as the host.
 
 ## Gate 3: Input Goes To The Right Place
 
@@ -97,7 +105,7 @@ Pause after all three gates pass. The review build must show:
 - A left vertical tab sidebar with expanded and collapsed modes
 - Three live web views
 - A toolbar with Back, Forward, Reload/Stop, and address controls
-- Direct GPU frame sharing on i915
+- A working zero-copy GPU path on i915 and GTX 1650
 - Working pointer, keyboard, scrolling, clipboard, focus, and fcitx input
 
 Only then can Fjord move into the [personal alpha](mvp-alpha.md).
