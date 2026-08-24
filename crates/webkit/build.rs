@@ -23,14 +23,6 @@ fn main() {
         .cargo_metadata(false)
         .probe("egl")
         .expect("EGL development files are required");
-    let gbm = pkg_config::Config::new()
-        .cargo_metadata(false)
-        .probe("gbm")
-        .expect("GBM development files are required");
-    let libdrm = pkg_config::Config::new()
-        .cargo_metadata(false)
-        .probe("libdrm")
-        .expect("libdrm development files are required");
     let protocol_directory = pkg_config::get_variable("wayland-protocols", "pkgdatadir")
         .expect("wayland-protocols pkg-config metadata is required");
     let protocol =
@@ -80,7 +72,7 @@ fn main() {
         .cargo_metadata(false)
         .probe("wayland-client")
         .expect("Wayland client development files are required");
-    for library in [&webkit, &platform, &headless, &egl, &gbm, &libdrm, &wayland] {
+    for library in [&webkit, &platform, &headless, &egl, &wayland] {
         for include_path in &library.include_paths {
             native.include(include_path);
         }
@@ -89,7 +81,7 @@ fn main() {
 
     let mut link_paths = BTreeSet::new();
     let mut libraries = BTreeSet::new();
-    for library in [&webkit, &platform, &headless, &egl, &gbm, &libdrm, &wayland] {
+    for library in [&webkit, &platform, &headless, &egl, &wayland] {
         for link_path in &library.link_paths {
             link_paths.insert(link_path);
         }

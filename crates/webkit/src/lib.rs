@@ -2,8 +2,6 @@ use std::ffi::{CStr, c_char, c_uint, c_void};
 
 #[link(name = "fjord_wpe_smoke", kind = "static")]
 #[link(name = "EGL")]
-#[link(name = "gbm")]
-#[link(name = "drm")]
 #[link(name = "wayland-client")]
 unsafe extern "C" {
     fn webkit_get_major_version() -> c_uint;

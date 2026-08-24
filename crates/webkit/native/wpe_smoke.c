@@ -3,10 +3,9 @@
 #include <dirent.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <gbm.h>
-#include <drm_fourcc.h>
 #include <fcntl.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,21 +58,38 @@ typedef struct {
 } SubsurfaceProbe;
 
 typedef struct {
-    gboolean released;
-} BufferRelease;
-
-typedef struct {
     struct wl_buffer *buffer;
     gboolean failed;
 } BufferCreation;
 
-static void buffer_release(void *data, struct wl_buffer *buffer) {
+typedef struct {
+    struct wl_display *display;
+    struct wl_event_queue *queue;
+    struct zwp_linux_dmabuf_v1 *dmabuf;
+    struct wl_surface *surface;
+    struct wl_buffer *buffer;
+    WPEView *view;
+    WPEBuffer *wpe_buffer;
+    GMainLoop *loop;
+    char **error_message;
+    gboolean released;
+} LiveBuffer;
+
+static void live_buffer_release(void *data, struct wl_buffer *buffer) {
+    LiveBuffer *live = data;
+
     (void)buffer;
-    ((BufferRelease *)data)->released = TRUE;
+    if (!live)
+        return;
+    if (live->released)
+        return;
+    live->released = TRUE;
+    wpe_view_buffer_released(live->view, live->wpe_buffer);
+    g_main_loop_quit(live->loop);
 }
 
-static const struct wl_buffer_listener buffer_listener = {
-    .release = buffer_release,
+static const struct wl_buffer_listener live_buffer_listener = {
+    .release = live_buffer_release,
 };
 
 static void buffer_created(
@@ -108,12 +124,11 @@ static void dmabuf_modifier(
     uint32_t modifier_high,
     uint32_t modifier_low
 ) {
-    SubsurfaceProbe *probe = data;
-
+    (void)data;
     (void)dmabuf;
-    if (format == DRM_FORMAT_XRGB8888 &&
-        (((uint64_t)modifier_high << 32) | modifier_low) == DRM_FORMAT_MOD_LINEAR)
-        probe->supports_linear_xrgb = TRUE;
+    (void)format;
+    (void)modifier_high;
+    (void)modifier_low;
 }
 
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
@@ -158,6 +173,14 @@ static const struct wl_registry_listener subsurface_probe_registry_listener = {
     .global_remove = subsurface_probe_global_remove,
 };
 
+static gboolean run_live_subsurface_view(
+    struct wl_display *display,
+    struct wl_event_queue *queue,
+    SubsurfaceProbe *probe,
+    struct wl_surface *surface,
+    char **error_message
+);
+
 int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, char **error_message) {
     struct wl_display *display = display_ptr;
     struct wl_surface *parent_surface = parent_surface_ptr;
@@ -167,17 +190,6 @@ int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, 
     struct wl_surface *surface = NULL;
     struct wl_subsurface *subsurface = NULL;
     struct wl_region *empty_input_region = NULL;
-    struct zwp_linux_buffer_params_v1 *params = NULL;
-    struct wl_buffer *buffer = NULL;
-    struct gbm_device *gbm = NULL;
-    struct gbm_bo *bo = NULL;
-    const char *render_node = g_getenv("FJORD_DRM_RENDER_NODE");
-    uint64_t requested_modifier = DRM_FORMAT_MOD_LINEAR;
-    uint64_t modifier;
-    int drm_fd = -1;
-    int buffer_fd = -1;
-    BufferRelease release = { 0 };
-    BufferCreation creation = { 0 };
     SubsurfaceProbe probe = { 0 };
 
     g_return_val_if_fail(display, 1);
@@ -204,8 +216,8 @@ int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, 
         *error_message = g_strdup("Wayland compositor lacks dma-buf modifier support");
         goto out;
     }
-    if (wl_display_roundtrip_queue(display, queue) < 0 || !probe.supports_linear_xrgb) {
-        *error_message = g_strdup("Wayland compositor does not advertise linear XRGB dma-bufs");
+    if (wl_display_roundtrip_queue(display, queue) < 0) {
+        *error_message = g_strdup("failed to query Wayland dma-buf modifiers");
         goto out;
     }
 
@@ -219,68 +231,8 @@ int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, 
     wl_surface_set_input_region(surface, empty_input_region);
     wl_subsurface_set_desync(subsurface);
 
-    drm_fd = open(render_node ? render_node : "/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
-    gbm = drm_fd >= 0 ? gbm_create_device(drm_fd) : NULL;
-    bo = gbm ? gbm_bo_create_with_modifiers(gbm, 64, 64, DRM_FORMAT_XRGB8888, &requested_modifier, 1) : NULL;
-    buffer_fd = bo ? gbm_bo_get_fd(bo) : -1;
-    if (!bo || buffer_fd < 0) {
-        *error_message = g_strdup("failed to allocate a linear GBM dma-buf");
+    if (!run_live_subsurface_view(display, queue, &probe, surface, error_message))
         goto out;
-    }
-    modifier = gbm_bo_get_modifier(bo);
-    params = zwp_linux_dmabuf_v1_create_params(probe.dmabuf);
-    zwp_linux_buffer_params_v1_add(
-        params,
-        buffer_fd,
-        0,
-        gbm_bo_get_offset(bo, 0),
-        gbm_bo_get_stride(bo),
-        modifier >> 32,
-        modifier & G_MAXUINT32
-    );
-    zwp_linux_buffer_params_v1_add_listener(params, &buffer_creation_listener, &creation);
-    zwp_linux_buffer_params_v1_create(params, 64, 64, DRM_FORMAT_XRGB8888, 0);
-    if (wl_display_roundtrip_queue(display, queue) < 0) {
-        *error_message = g_strdup("Wayland connection failed while creating the GBM dma-buf");
-        goto out;
-    }
-    if (creation.failed) {
-        *error_message = g_strdup("Wayland compositor rejected the GBM dma-buf");
-        goto out;
-    }
-    buffer = creation.buffer;
-    if (!buffer) {
-        *error_message = g_strdup("Wayland compositor did not create a GBM dma-buf buffer");
-        goto out;
-    }
-    buffer = creation.buffer;
-    wl_buffer_add_listener(buffer, &buffer_listener, &release);
-    wl_surface_attach(surface, buffer, 0, 0);
-    wl_surface_damage(surface, 0, 0, 64, 64);
-    wl_surface_commit(surface);
-    if (wl_display_flush(display) < 0) {
-        *error_message = g_strdup("failed to flush Wayland subsurface");
-        goto out;
-    }
-    buffer_fd = -1; // libwayland closes the sent fd during the successful flush.
-    if (wl_display_roundtrip_queue(display, queue) < 0) {
-        *error_message = g_strdup("failed to present the GBM dma-buf");
-        goto out;
-    }
-    wl_surface_attach(surface, NULL, 0, 0);
-    wl_surface_commit(surface);
-    if (wl_display_flush(display) < 0) {
-        *error_message = g_strdup("failed to detach the GBM dma-buf");
-        goto out;
-    }
-    for (guint attempt = 0; attempt < 2 && !release.released; attempt++) {
-        if (wl_display_roundtrip_queue(display, queue) < 0) {
-            *error_message = g_strdup("failed to dispatch Wayland subsurface events");
-            goto out;
-        }
-    }
-    if (!release.released)
-        *error_message = g_strdup("Wayland compositor did not release the GBM dma-buf");
 
 out:
     if (display_wrapper)
@@ -291,18 +243,6 @@ out:
         wl_subsurface_destroy(subsurface);
     if (surface)
         wl_surface_destroy(surface);
-    if (buffer)
-        wl_buffer_destroy(buffer);
-    if (params)
-        zwp_linux_buffer_params_v1_destroy(params);
-    if (buffer_fd >= 0)
-        close(buffer_fd);
-    if (bo)
-        gbm_bo_destroy(bo);
-    if (gbm)
-        gbm_device_destroy(gbm);
-    if (drm_fd >= 0)
-        close(drm_fd);
     if (probe.dmabuf)
         zwp_linux_dmabuf_v1_destroy(probe.dmabuf);
     if (probe.subcompositor)
@@ -671,10 +611,10 @@ static gboolean timeout_cb(SmokeState *state) {
     return G_SOURCE_REMOVE;
 }
 
-static GSource *attach_timeout(GMainContext *context, guint milliseconds, GSourceFunc callback, SmokeState *state) {
+static GSource *attach_timeout(GMainContext *context, guint milliseconds, GSourceFunc callback, gpointer data) {
     GSource *source = g_timeout_source_new(milliseconds);
 
-    g_source_set_callback(source, callback, state, NULL);
+    g_source_set_callback(source, callback, data, NULL);
     g_source_attach(source, context);
     return source;
 }
@@ -768,6 +708,241 @@ out:
     }
 
     return TRUE;
+}
+
+static void live_buffer_fail(LiveBuffer *live, const char *message) {
+    if (!*live->error_message)
+        *live->error_message = g_strdup(message);
+    g_main_loop_quit(live->loop);
+}
+
+static gboolean attach_live_buffer(LiveBuffer *live, WPEBuffer *wpe_buffer) {
+    WPEBufferDMABuf *dma_buf;
+    struct zwp_linux_buffer_params_v1 *params = NULL;
+    BufferCreation creation = { 0 };
+    int plane_fds[4] = { -1, -1, -1, -1 };
+    guint planes;
+
+    if (!WPE_IS_BUFFER_DMA_BUF(wpe_buffer)) {
+        live_buffer_fail(live, "WPE headless view did not render a dma-buf");
+        return FALSE;
+    }
+    dma_buf = WPE_BUFFER_DMA_BUF(wpe_buffer);
+    planes = wpe_buffer_dma_buf_get_n_planes(dma_buf);
+    if (!planes || planes > G_N_ELEMENTS(plane_fds)) {
+        live_buffer_fail(live, "WPE dma-buf has an unsupported plane count");
+        return FALSE;
+    }
+
+    params = zwp_linux_dmabuf_v1_create_params(live->dmabuf);
+    if (!params) {
+        live_buffer_fail(live, "failed to create Wayland dma-buf parameters");
+        goto out;
+    }
+    for (guint plane = 0; plane < planes; plane++) {
+        int fd = wpe_buffer_dma_buf_get_fd(dma_buf, plane);
+
+        plane_fds[plane] = fd >= 0 ? fcntl(fd, F_DUPFD_CLOEXEC, 3) : -1;
+        if (plane_fds[plane] < 0) {
+            live_buffer_fail(live, "failed to duplicate a WPE dma-buf plane");
+            goto out;
+        }
+        zwp_linux_buffer_params_v1_add(
+            params,
+            plane_fds[plane],
+            plane,
+            wpe_buffer_dma_buf_get_offset(dma_buf, plane),
+            wpe_buffer_dma_buf_get_stride(dma_buf, plane),
+            wpe_buffer_dma_buf_get_modifier(dma_buf) >> 32,
+            wpe_buffer_dma_buf_get_modifier(dma_buf) & G_MAXUINT32
+        );
+    }
+    zwp_linux_buffer_params_v1_add_listener(params, &buffer_creation_listener, &creation);
+    zwp_linux_buffer_params_v1_create(
+        params,
+        wpe_buffer_get_width(wpe_buffer),
+        wpe_buffer_get_height(wpe_buffer),
+        wpe_buffer_dma_buf_get_format(dma_buf),
+        0
+    );
+    if (wl_display_roundtrip_queue(live->display, live->queue) < 0) {
+        live_buffer_fail(live, "Wayland connection failed while creating the WPE dma-buf");
+        goto out;
+    }
+    for (guint plane = 0; plane < planes; plane++)
+        plane_fds[plane] = -1; // libwayland closes the duplicated descriptors after flushing them.
+    if (creation.failed || !creation.buffer) {
+        live_buffer_fail(live, "Wayland compositor rejected the WPE dma-buf");
+        goto out;
+    }
+
+    live->buffer = creation.buffer;
+    live->wpe_buffer = wpe_buffer;
+    wl_buffer_add_listener(live->buffer, &live_buffer_listener, live);
+    wl_surface_attach(live->surface, live->buffer, 0, 0);
+    wl_surface_damage(live->surface, 0, 0, wpe_buffer_get_width(wpe_buffer), wpe_buffer_get_height(wpe_buffer));
+    wl_surface_commit(live->surface);
+    if (wl_display_roundtrip_queue(live->display, live->queue) < 0) {
+        live_buffer_fail(live, "failed to present the WPE dma-buf");
+        goto out;
+    }
+    wl_surface_attach(live->surface, NULL, 0, 0);
+    wl_surface_commit(live->surface);
+    if (wl_display_flush(live->display) < 0) {
+        live_buffer_fail(live, "failed to detach the WPE dma-buf");
+        goto out;
+    }
+    for (guint attempt = 0; attempt < 2 && !live->released; attempt++) {
+        if (wl_display_roundtrip_queue(live->display, live->queue) < 0) {
+            live_buffer_fail(live, "failed to dispatch the WPE dma-buf release");
+            goto out;
+        }
+    }
+    if (!live->released)
+        live_buffer_fail(live, "Wayland compositor did not release the WPE dma-buf");
+
+out:
+    if (params)
+        zwp_linux_buffer_params_v1_destroy(params);
+    for (guint plane = 0; plane < G_N_ELEMENTS(plane_fds); plane++) {
+        if (plane_fds[plane] >= 0)
+            close(plane_fds[plane]);
+    }
+    return !*live->error_message;
+}
+
+static void live_buffer_rendered(WPEView *view, WPEBuffer *buffer, LiveBuffer *live) {
+    if (!live->buffer) {
+        live->view = view;
+        attach_live_buffer(live, buffer);
+    }
+}
+
+static gboolean live_buffer_timeout(LiveBuffer *live) {
+    live_buffer_fail(live, "timed out waiting for Wayland to release the WPE dma-buf");
+    return G_SOURCE_REMOVE;
+}
+
+static void remove_tree(const char *path) {
+    GDir *directory = g_dir_open(path, 0, NULL);
+    const char *name;
+
+    if (!directory) {
+        g_remove(path);
+        return;
+    }
+    while ((name = g_dir_read_name(directory))) {
+        char *child = g_build_filename(path, name, NULL);
+
+        remove_tree(child);
+        g_free(child);
+    }
+    g_dir_close(directory);
+    g_rmdir(path);
+}
+
+static gboolean run_live_subsurface_view(
+    struct wl_display *wayland_display,
+    struct wl_event_queue *queue,
+    SubsurfaceProbe *probe,
+    struct wl_surface *surface,
+    char **error_message
+) {
+    static const char fixture[] = "<!doctype html><title>Fjord Gate 2</title><body>fjord</body>";
+    GMainContext *context = NULL;
+    GMainLoop *loop = NULL;
+    WPEDisplay *display = NULL;
+    WebKitWebContext *web_context = NULL;
+    WebKitNetworkSession *network_session = NULL;
+    WebKitWebView *web_view = NULL;
+    WPEView *view = NULL;
+    WPEToplevel *toplevel = NULL;
+    GSource *timeout = NULL;
+    GError *directory_error = NULL;
+    char *profile = NULL;
+    char *data_directory = NULL;
+    char *cache_directory = NULL;
+    LiveBuffer live = {
+        .display = wayland_display,
+        .queue = queue,
+        .dmabuf = probe->dmabuf,
+        .surface = surface,
+        .error_message = error_message,
+    };
+
+    context = g_main_context_new();
+    g_main_context_push_thread_default(context);
+    loop = g_main_loop_new(context, FALSE);
+    live.loop = loop;
+    profile = g_dir_make_tmp("fjord-gate2-XXXXXX", &directory_error);
+    if (!profile) {
+        *error_message = g_strdup(directory_error->message);
+        g_clear_error(&directory_error);
+        goto out;
+    }
+    data_directory = g_build_filename(profile, "data", NULL);
+    cache_directory = g_build_filename(profile, "cache", NULL);
+    if (g_mkdir(data_directory, 0700) || g_mkdir(cache_directory, 0700)) {
+        *error_message = g_strdup("failed to create WPE smoke profile directories");
+        goto out;
+    }
+    display = wpe_display_headless_new();
+    web_context = webkit_web_context_new();
+    network_session = webkit_network_session_new(data_directory, cache_directory);
+    if (!display || !web_context || !network_session) {
+        *error_message = g_strdup("failed to create WPE headless smoke view");
+        goto out;
+    }
+    web_view = WEBKIT_WEB_VIEW(g_object_new(
+        WEBKIT_TYPE_WEB_VIEW,
+        "display", display,
+        "web-context", web_context,
+        "network-session", network_session,
+        NULL
+    ));
+    view = web_view ? webkit_web_view_get_wpe_view(web_view) : NULL;
+    toplevel = view ? wpe_view_get_toplevel(view) : NULL;
+    if (!view || !toplevel || !wpe_toplevel_resize(toplevel, 800, 600)) {
+        *error_message = g_strdup("failed to configure WPE headless smoke view");
+        goto out;
+    }
+    g_signal_connect(view, "buffer-rendered", G_CALLBACK(live_buffer_rendered), &live);
+    timeout = attach_timeout(context, 15000, G_SOURCE_FUNC(live_buffer_timeout), &live);
+    webkit_web_view_load_html(web_view, fixture, "fjord-gate2://fixture/");
+    g_main_loop_run(loop);
+
+out:
+    if (timeout) {
+        g_source_destroy(timeout);
+        g_source_unref(timeout);
+    }
+    if (view)
+        g_signal_handlers_disconnect_by_data(view, &live);
+    if (live.buffer) {
+        wl_proxy_set_user_data((struct wl_proxy *)live.buffer, NULL);
+        wl_buffer_destroy(live.buffer);
+        wl_display_flush(wayland_display);
+    }
+    if (web_view)
+        g_object_unref(web_view);
+    if (network_session)
+        g_object_unref(network_session);
+    if (web_context)
+        g_object_unref(web_context);
+    if (display)
+        g_object_unref(display);
+    if (profile)
+        remove_tree(profile);
+    g_free(cache_directory);
+    g_free(data_directory);
+    g_free(profile);
+    if (loop)
+        g_main_loop_unref(loop);
+    if (context) {
+        g_main_context_pop_thread_default(context);
+        g_main_context_unref(context);
+    }
+    return !*error_message;
 }
 
 static gboolean open_file_descriptor_count(uint32_t *count) {

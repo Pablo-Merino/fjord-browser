@@ -249,3 +249,18 @@ ready` after the GBM buffer release check.
 
 **Next:** Attach live WPE dma-buf frames to the GPUI-owned child surface and
 release each WPE frame from `wl_buffer.release`.
+
+## 2026-08-24: Live WPE DMA-BUF Subsurface
+
+**Changed:** The GPUI Wayland smoke now creates a WPE headless view, imports
+its live dma-buf into the GPUI-owned child surface, and returns the frame to
+WPE only from `wl_buffer.release`.
+
+**Checks:** `dev.sh verify` passed locally. `dev.sh gpui-smoke` passed on
+Athena's Hyprland session.
+
+**Evidence:** Athena GPUI smoke output: `GPUI Wayland live WPE subsurface
+smoke ready`.
+
+**Next:** Keep the child surface alive across frames, add frame and resize
+handling, then exercise three live WPE views.

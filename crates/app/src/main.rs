@@ -43,7 +43,7 @@ impl Render for Fjord {
             }
             .map_or_else(
                 |error| eprintln!("GPUI Wayland subsurface probe unavailable: {error}"),
-                |_| println!("GPUI Wayland subsurface protocol ready"),
+                |_| println!("GPUI Wayland live WPE subsurface smoke ready"),
             );
             self.subsurface_probe_pending = false;
         }
