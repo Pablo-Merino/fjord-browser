@@ -151,3 +151,17 @@ verification and web-process teardown also passed.
 **Next:** Build the approved narrow GPUI Linux renderer path to import WPE's
 DMA-BUF. The current WPE platform does not advertise explicit synchronization,
 so document and validate the available synchronization primitive before import.
+
+## 2026-08-24: DMA-BUF Plane Boundary
+
+**Changed:** The WPE harness now duplicates dma-buf plane descriptors, offsets,
+and strides into its plain C report before releasing WPE objects. The Rust
+runner closes those duplicated descriptors after reporting.
+
+**Checks:** `dev.sh verify` and `dev.sh wpe-smoke` passed locally.
+`dev.sh wpe-hardware` passed on Athena with a two-plane i915 dma-buf.
+
+**Evidence:** `artifacts/reports/runs/gate1/wpe-hardware.txt` on Athena.
+
+**Next:** Import and sample the duplicated dma-buf with Vulkan/wgpu on Athena
+before changing GPUI's renderer.

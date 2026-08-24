@@ -1,6 +1,7 @@
 #include "wpe_smoke.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <glib.h>
 #include <limits.h>
 #include <stdio.h>
@@ -28,6 +29,21 @@ static void set_error(SmokeState *state, const char *message) {
         state->error_message = g_strdup(message);
 }
 
+void fjord_wpe_smoke_close_fds(FjordWpeSmokeReport *report) {
+    for (guint plane = 0; plane < G_N_ELEMENTS(report->dma_buf_fds); plane++) {
+        if (report->dma_buf_fds[plane] >= 0)
+            close(report->dma_buf_fds[plane]);
+        report->dma_buf_fds[plane] = -1;
+    }
+}
+
+static void reset_report(FjordWpeSmokeReport *report) {
+    fjord_wpe_smoke_close_fds(report);
+    memset(report, 0, sizeof(*report));
+    for (guint plane = 0; plane < G_N_ELEMENTS(report->dma_buf_fds); plane++)
+        report->dma_buf_fds[plane] = -1;
+}
+
 static void capture_buffer(SmokeState *state, WPEBuffer *buffer) {
     FjordWpeSmokeReport *report = state->report;
 
@@ -44,8 +60,21 @@ static void capture_buffer(SmokeState *state, WPEBuffer *buffer) {
         report->format = wpe_buffer_dma_buf_get_format(dma_buf);
         report->modifier = wpe_buffer_dma_buf_get_modifier(dma_buf);
         report->planes = wpe_buffer_dma_buf_get_n_planes(dma_buf);
-        if (report->planes)
-            report->stride = wpe_buffer_dma_buf_get_stride(dma_buf, 0);
+        for (guint plane = 0; plane < report->planes; plane++) {
+            int fd = wpe_buffer_dma_buf_get_fd(dma_buf, plane);
+
+            if (plane >= G_N_ELEMENTS(report->dma_buf_fds)) {
+                set_error(state, "WPE dma-buf has too many planes");
+                return;
+            }
+            if (fd < 0 || (report->dma_buf_fds[plane] = fcntl(fd, F_DUPFD_CLOEXEC, 3)) < 0) {
+                set_error(state, "failed to duplicate WPE dma-buf plane");
+                return;
+            }
+            report->offsets[plane] = wpe_buffer_dma_buf_get_offset(dma_buf, plane);
+            report->strides[plane] = wpe_buffer_dma_buf_get_stride(dma_buf, plane);
+        }
+        report->stride = report->strides[0];
     } else if (WPE_IS_BUFFER_SHM(buffer)) {
         WPEBufferSHM *shm = WPE_BUFFER_SHM(buffer);
         g_strlcpy(report->buffer_kind, "shm", sizeof(report->buffer_kind));
@@ -409,6 +438,9 @@ int fjord_wpe_smoke_run(
     g_return_val_if_fail(error_message, 1);
 
     *error_message = NULL;
+    memset(report, 0, sizeof(*report));
+    for (guint plane = 0; plane < G_N_ELEMENTS(report->dma_buf_fds); plane++)
+        report->dma_buf_fds[plane] = -1;
     context = g_main_context_new();
     g_main_context_push_thread_default(context);
     loop = g_main_loop_new(context, FALSE);
@@ -434,7 +466,7 @@ int fjord_wpe_smoke_run(
         uint32_t descriptors;
         uint32_t descendants;
 
-        memset(report, 0, sizeof(*report));
+        reset_report(report);
         report->sandbox_tools_available =
             g_find_program_in_path("bwrap") != NULL && g_find_program_in_path("xdg-dbus-proxy") != NULL;
         capture_display_capabilities(report, display);
@@ -498,6 +530,8 @@ out:
     g_main_context_pop_thread_default(context);
     g_main_context_unref(context);
 
+    if (*error_message)
+        fjord_wpe_smoke_close_fds(report);
     return *error_message ? 1 : 0;
 }
 

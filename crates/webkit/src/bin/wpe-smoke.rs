@@ -35,6 +35,9 @@ struct Report {
     fd_after: u32,
     modifier: u64,
     preferred_modifier: u64,
+    dma_buf_fds: [i32; 4],
+    offsets: [u32; 4],
+    strides: [u32; 4],
     buffer_kind: [c_char; 16],
     primary_node: [c_char; 96],
     render_node: [c_char; 96],
@@ -64,6 +67,7 @@ unsafe extern "C" {
         error_message: *mut *mut c_char,
     ) -> i32;
     fn fjord_wpe_smoke_free_error(error_message: *mut c_char);
+    fn fjord_wpe_smoke_close_fds(report: *mut Report);
     fn fjord_wpe_smoke_report_size() -> usize;
 }
 
@@ -147,7 +151,7 @@ fn main() -> Result<(), String> {
         .join()
         .map_err(|_| "WPE smoke thread panicked".to_owned())?;
     let cleanup = fs::remove_dir_all(&profile).map_err(|error| error.to_string());
-    let (report, stress) = result?;
+    let (mut report, stress) = result?;
     cleanup?;
 
     let buffer_kind = unsafe { CStr::from_ptr(report.buffer_kind.as_ptr()) }
@@ -212,5 +216,6 @@ fn main() -> Result<(), String> {
         return Err("WPE smoke report is missing required lifecycle events".into());
     }
 
+    unsafe { fjord_wpe_smoke_close_fds(&mut report) };
     Ok(())
 }

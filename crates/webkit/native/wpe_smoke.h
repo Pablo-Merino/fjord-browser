@@ -34,6 +34,9 @@ typedef struct {
     uint32_t fd_after;
     uint64_t modifier;
     uint64_t preferred_modifier;
+    int32_t dma_buf_fds[4];
+    uint32_t offsets[4];
+    uint32_t strides[4];
     char buffer_kind[16];
     char primary_node[96];
     char render_node[96];
@@ -49,6 +52,8 @@ int fjord_wpe_smoke_run(
 );
 
 void fjord_wpe_smoke_free_error(char *error_message);
+
+void fjord_wpe_smoke_close_fds(FjordWpeSmokeReport *report);
 
 size_t fjord_wpe_smoke_report_size(void);
 
