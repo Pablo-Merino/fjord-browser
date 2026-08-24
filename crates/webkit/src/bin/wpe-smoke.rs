@@ -129,11 +129,13 @@ fn run_stress(profile: PathBuf, uri: Option<&str>) -> Result<Report, String> {
 fn main() -> Result<(), String> {
     let mut uri = None;
     let mut stress = false;
+    let mut hardware = false;
 
     for argument in std::env::args().skip(1) {
         match argument.as_str() {
             "--network" => uri = Some("https://example.com/"),
             "--stress" => stress = true,
+            "--hardware" => hardware = true,
             _ => return Err(format!("unknown argument: {argument}")),
         }
     }
@@ -206,6 +208,9 @@ fn main() -> Result<(), String> {
     }
     if !report.sandbox_verified {
         return Err("WPE sandbox did not create an isolated child process".into());
+    }
+    if hardware && (buffer_kind != "dma-buf" || !report.egl_imported) {
+        return Err("WPE hardware run did not import a dma-buf through EGL".into());
     }
     if !report.committed
         || !report.finished

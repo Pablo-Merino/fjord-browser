@@ -204,5 +204,18 @@ modifier combinations use a zero-copy WPE Wayland subsurface instead.
 
 **Why:** The browser must work on normal Linux GPUs, not only the i915 laptop.
 
-**Next:** Implement the runtime path probe and validate it on i915 and GTX
-1650.
+**Next:** Implement the runtime path probe and validate it on active Linux
+hardware. Athena is optional compatibility coverage.
+
+## 2026-08-24: GTX DRM Preflight Blocker
+
+**Changed:** Made `dev.sh wpe-hardware` fail unless WPE produces and EGL imports
+a dma-buf. The command now passes host DRM group IDs into the test container.
+
+**Result:** The headless GTX 1650 host is not a usable WPE DRM target. Its
+driver reports no PCI driver and rejects KMS buffer creation, so WPE times out
+without a frame.
+
+**Next:** Use any active Linux GPU with a working DRM stack for the hardware
+gate. The GTX host cannot provide that evidence until its graphics driver and
+KMS access work.

@@ -31,6 +31,7 @@ run_container() {
 
     local tty=()
     local devices=()
+    local device_groups=()
     local security=(--security-opt seccomp=unconfined --security-opt apparmor=unconfined)
     if [[ -t 0 && -t 1 ]]; then
         tty=(-it)
@@ -40,10 +41,18 @@ run_container() {
         security=(--privileged)
     fi
     if [[ $needs_dri == true ]]; then
+        [[ -d /dev/dri ]] || {
+            printf 'No DRM devices are available\n' >&2
+            return 1
+        }
         devices=(--device /dev/dri)
+        for device in /dev/dri/*; do
+            group=$(stat -c %g "$device")
+            [[ " ${device_groups[*]} " == *" $group "* ]] || device_groups+=(--group-add "$group")
+        done
     fi
 
-    docker run --rm --init "${tty[@]}" "${security[@]}" "${devices[@]}" \
+    docker run --rm --init "${tty[@]}" "${security[@]}" "${devices[@]}" "${device_groups[@]}" \
         --shm-size=1g \
         --security-opt seccomp=unconfined \
         --security-opt apparmor=unconfined \

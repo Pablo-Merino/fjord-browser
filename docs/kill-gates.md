@@ -10,7 +10,7 @@ is not enough. Each gate needs working behavior and saved evidence.
 | Browser interface | GPUI on Wayland |
 | Web engine | WPE WebKit 2.52.x from Arch Linux |
 | Build environment | Pinned Arch Linux container on the headless host |
-| Hardware test machines | Omarchy i915 laptop and GTX 1650 host |
+| Hardware test machine | Any active Linux GPU with a working DRM stack |
 | Early UI tests | Headless Wayland with software graphics allowed |
 
 The progress log records the commands, results, and saved evidence. Exact
@@ -68,8 +68,8 @@ It must:
 - Render correct size, colors, and transparency.
 - Switch three live views without stale content.
 - Keep any GPUI change limited to one small Linux renderer feature.
-- Exercise the i915 laptop and GTX 1650 host. Untested GPUs must use the
-  runtime probe and select a working zero-copy path instead of crashing.
+- Exercise at least one active Linux GPU. Untested GPUs must use the runtime
+  probe and select a working zero-copy path instead of crashing.
 
 **Proof:** frame and synchronization counters, reviewed screenshots, and
 recorded runs for each hardware test machine.
@@ -105,7 +105,7 @@ Pause after all three gates pass. The review build must show:
 - A left vertical tab sidebar with expanded and collapsed modes
 - Three live web views
 - A toolbar with Back, Forward, Reload/Stop, and address controls
-- A working zero-copy GPU path on i915 and GTX 1650
+- A working zero-copy GPU path on active Linux hardware
 - Working pointer, keyboard, scrolling, clipboard, focus, and fcitx input
 
 Only then can Fjord move into the [personal alpha](mvp-alpha.md).
