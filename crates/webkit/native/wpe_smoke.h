@@ -29,6 +29,9 @@ typedef struct {
     uint32_t planes;
     uint32_t preferred_format;
     uint32_t preferred_format_count;
+    uint32_t views;
+    uint32_t fd_baseline;
+    uint32_t fd_after;
     uint64_t modifier;
     uint64_t preferred_modifier;
     char buffer_kind[16];
@@ -40,6 +43,7 @@ int fjord_wpe_smoke_run(
     const char *data_directory,
     const char *cache_directory,
     const char *uri,
+    uint32_t views,
     FjordWpeSmokeReport *report,
     char **error_message
 );

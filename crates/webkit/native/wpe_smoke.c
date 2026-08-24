@@ -17,8 +17,10 @@ typedef struct {
     WebKitWebView *web_view;
     FjordWpeSmokeReport *report;
     const char *expected_title;
+    const char *expected_uri;
     char *error_message;
     gboolean termination_requested;
+    gboolean terminate_web_process;
 } SmokeState;
 
 static void set_error(SmokeState *state, const char *message) {
@@ -55,8 +57,7 @@ static void capture_buffer(SmokeState *state, WPEBuffer *buffer) {
     }
 }
 
-static void capture_display_capabilities(SmokeState *state, WPEDisplay *display) {
-    FjordWpeSmokeReport *report = state->report;
+static void capture_display_capabilities(FjordWpeSmokeReport *report, WPEDisplay *display) {
     WPEDRMDevice *device = wpe_display_get_drm_device(display);
     WPEBufferFormats *formats = wpe_display_get_preferred_buffer_formats(display);
 
@@ -88,7 +89,34 @@ static void capture_display_capabilities(SmokeState *state, WPEDisplay *display)
     }
 }
 
-static gboolean has_sandboxed_descendant(void) {
+static gboolean is_descendant_of_self(long process_id) {
+    long parent = process_id;
+
+    for (guint depth = 0; depth < 64 && parent > 1; depth++) {
+        FILE *status;
+        char status_path[64];
+        char line[64];
+
+        if (parent == getpid())
+            return TRUE;
+        g_snprintf(status_path, sizeof(status_path), "/proc/%ld/status", parent);
+        status = fopen(status_path, "r");
+        if (!status)
+            return FALSE;
+        parent = 0;
+        while (fgets(line, sizeof(line), status)) {
+            if (g_str_has_prefix(line, "PPid:")) {
+                parent = strtol(line + 5, NULL, 10);
+                break;
+            }
+        }
+        fclose(status);
+    }
+
+    return FALSE;
+}
+
+static gboolean sandboxed_descendant_count(uint32_t *count) {
     char self_namespace[PATH_MAX];
     ssize_t self_length;
     DIR *proc;
@@ -98,6 +126,7 @@ static gboolean has_sandboxed_descendant(void) {
     if (self_length < 0)
         return FALSE;
     self_namespace[self_length] = '\0';
+    *count = 0;
 
     proc = opendir("/proc");
     if (!proc)
@@ -112,20 +141,26 @@ static gboolean has_sandboxed_descendant(void) {
 
         if (!entry->d_name[0] || *end || value <= 1)
             continue;
+        if (!is_descendant_of_self(value))
+            continue;
 
         g_snprintf(namespace_path, sizeof(namespace_path), "/proc/%ld/ns/user", value);
         namespace_length = readlink(namespace_path, namespace, sizeof(namespace) - 1);
         if (namespace_length < 0)
             continue;
         namespace[namespace_length] = '\0';
-        if (g_strcmp0(self_namespace, namespace) != 0) {
-            closedir(proc);
-            return TRUE;
-        }
+        if (g_strcmp0(self_namespace, namespace) != 0)
+            (*count)++;
     }
 
     closedir(proc);
-    return FALSE;
+    return TRUE;
+}
+
+static gboolean has_sandboxed_descendant(void) {
+    uint32_t count;
+
+    return sandboxed_descendant_count(&count) && count;
 }
 
 static void maybe_terminate(SmokeState *state) {
@@ -139,17 +174,39 @@ static void maybe_terminate(SmokeState *state) {
     report->sandbox_verified = has_sandboxed_descendant();
     if (!report->sandbox_verified)
         set_error(state, "no WPE descendant entered a separate user namespace");
-    webkit_web_view_terminate_web_process(state->web_view);
+    if (state->terminate_web_process)
+        webkit_web_view_terminate_web_process(state->web_view);
+    else
+        g_main_loop_quit(state->loop);
 }
 
 static void load_changed(WebKitWebView *web_view, WebKitLoadEvent event, SmokeState *state) {
-    (void)web_view;
-
     if (event == WEBKIT_LOAD_COMMITTED)
         state->report->committed = true;
-    if (event == WEBKIT_LOAD_FINISHED)
+    if (event == WEBKIT_LOAD_FINISHED) {
         state->report->finished = true;
+        if (state->expected_uri &&
+            g_strcmp0(webkit_web_view_get_uri(web_view), state->expected_uri) != 0)
+            set_error(state, "WPE did not finish at the requested URI");
+    }
     maybe_terminate(state);
+}
+
+static gboolean load_failed(
+    WebKitWebView *web_view,
+    WebKitLoadEvent event,
+    const char *failing_uri,
+    GError *error,
+    SmokeState *state
+) {
+    (void)web_view;
+    (void)event;
+    (void)failing_uri;
+    (void)error;
+
+    set_error(state, "WPE page load failed");
+    g_main_loop_quit(state->loop);
+    return FALSE;
 }
 
 static void title_changed(WebKitWebView *web_view, GParamSpec *spec, SmokeState *state) {
@@ -215,18 +272,22 @@ static gboolean timeout_cb(SmokeState *state) {
     return G_SOURCE_REMOVE;
 }
 
-static void attach_timeout(GMainContext *context, guint milliseconds, GSourceFunc callback, SmokeState *state) {
+static GSource *attach_timeout(GMainContext *context, guint milliseconds, GSourceFunc callback, SmokeState *state) {
     GSource *source = g_timeout_source_new(milliseconds);
 
     g_source_set_callback(source, callback, state, NULL);
     g_source_attach(source, context);
-    g_source_unref(source);
+    return source;
 }
 
-int fjord_wpe_smoke_run(
-    const char *data_directory,
-    const char *cache_directory,
+static gboolean run_view(
+    GMainContext *context,
+    GMainLoop *loop,
+    WPEDisplay *display,
+    WebKitWebContext *web_context,
+    WebKitNetworkSession *network_session,
     const char *uri,
+    gboolean terminate_web_process,
     FjordWpeSmokeReport *report,
     char **error_message
 ) {
@@ -235,40 +296,16 @@ int fjord_wpe_smoke_run(
         "<script>document.title='Fjord WPE smoke';"
         "setTimeout(() => document.body.style.background='#111', 50);</script>";
     SmokeState state = {0};
-    WPEDisplay *display = NULL;
-    WebKitWebContext *web_context = NULL;
-    WebKitNetworkSession *network_session = NULL;
     WPEView *view = NULL;
     WPEToplevel *toplevel = NULL;
+    GSource *timeout = NULL;
 
-    g_return_val_if_fail(data_directory, 1);
-    g_return_val_if_fail(cache_directory, 1);
-    g_return_val_if_fail(report, 1);
-    g_return_val_if_fail(error_message, 1);
-
-    memset(report, 0, sizeof(*report));
-    *error_message = NULL;
     state.report = report;
     state.expected_title = uri ? NULL : "Fjord WPE smoke";
-    state.context = g_main_context_new();
-    g_main_context_push_thread_default(state.context);
-    state.loop = g_main_loop_new(state.context, FALSE);
-    report->sandbox_tools_available =
-        g_find_program_in_path("bwrap") != NULL && g_find_program_in_path("xdg-dbus-proxy") != NULL;
-
-    if (g_mkdir_with_parents(data_directory, 0700) || g_mkdir_with_parents(cache_directory, 0700)) {
-        set_error(&state, "failed to create WPE profile directories");
-        goto out;
-    }
-
-    display = wpe_display_headless_new();
-    web_context = webkit_web_context_new();
-    network_session = webkit_network_session_new(data_directory, cache_directory);
-    if (!display || !web_context || !network_session) {
-        set_error(&state, "failed to create WPE display, context, or network session");
-        goto out;
-    }
-    capture_display_capabilities(&state, display);
+    state.expected_uri = uri;
+    state.terminate_web_process = terminate_web_process;
+    state.context = context;
+    state.loop = loop;
 
     state.web_view = WEBKIT_WEB_VIEW(g_object_new(
         WEBKIT_TYPE_WEB_VIEW,
@@ -290,6 +327,7 @@ int fjord_wpe_smoke_run(
     }
 
     g_signal_connect(state.web_view, "load-changed", G_CALLBACK(load_changed), &state);
+    g_signal_connect(state.web_view, "load-failed", G_CALLBACK(load_failed), &state);
     g_signal_connect(state.web_view, "notify::title", G_CALLBACK(title_changed), &state);
     g_signal_connect(state.web_view, "notify::uri", G_CALLBACK(uri_changed), &state);
     g_signal_connect(state.web_view, "web-process-terminated", G_CALLBACK(web_process_terminated), &state);
@@ -297,39 +335,170 @@ int fjord_wpe_smoke_run(
     g_signal_connect(view, "buffer-rendered", G_CALLBACK(buffer_rendered), &state);
     g_signal_connect(view, "buffer-released", G_CALLBACK(buffer_released), &state);
 
-    attach_timeout(state.context, 15000, G_SOURCE_FUNC(timeout_cb), &state);
+    timeout = attach_timeout(state.context, 15000, G_SOURCE_FUNC(timeout_cb), &state);
     if (uri)
         webkit_web_view_load_uri(state.web_view, uri);
     else
         webkit_web_view_load_html(state.web_view, fixture, "fjord-smoke://fixture/");
     g_main_loop_run(state.loop);
+    g_source_destroy(timeout);
+    g_source_unref(timeout);
+    timeout = NULL;
 
     if (!state.error_message &&
         (!report->committed || !report->finished || !report->title_changed || !report->uri_changed ||
          !report->buffers_changed || !report->buffer_rendered || !report->buffer_released ||
-         !report->web_process_terminated))
+         (terminate_web_process && !report->web_process_terminated)))
         set_error(&state, "WPE lifecycle completed without all required events");
 
 out:
+    if (timeout) {
+        g_source_destroy(timeout);
+        g_source_unref(timeout);
+    }
+    if (view)
+        g_signal_handlers_disconnect_by_data(view, &state);
+    if (state.web_view)
+        g_signal_handlers_disconnect_by_data(state.web_view, &state);
     if (state.web_view)
         g_object_unref(state.web_view);
+
+    if (state.error_message) {
+        *error_message = state.error_message;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean open_file_descriptor_count(uint32_t *count) {
+    DIR *directory = opendir("/proc/self/fd");
+    struct dirent *entry;
+
+    if (!directory)
+        return FALSE;
+    *count = 0;
+    while ((entry = readdir(directory))) {
+        if (g_strcmp0(entry->d_name, ".") && g_strcmp0(entry->d_name, ".."))
+            (*count)++;
+    }
+    closedir(directory);
+    return TRUE;
+}
+
+int fjord_wpe_smoke_run(
+    const char *data_directory,
+    const char *cache_directory,
+    const char *uri,
+    uint32_t views,
+    FjordWpeSmokeReport *report,
+    char **error_message
+) {
+    GMainContext *context = NULL;
+    GMainLoop *loop = NULL;
+    WPEDisplay *display = NULL;
+    WebKitWebContext *web_context = NULL;
+    WebKitNetworkSession *network_session = NULL;
+    uint32_t fd_baseline = 0;
+    uint32_t fd_after = 0;
+
+    g_return_val_if_fail(data_directory, 1);
+    g_return_val_if_fail(cache_directory, 1);
+    g_return_val_if_fail(views == 1 || views >= 3, 1);
+    g_return_val_if_fail(report, 1);
+    g_return_val_if_fail(error_message, 1);
+
+    *error_message = NULL;
+    context = g_main_context_new();
+    g_main_context_push_thread_default(context);
+    loop = g_main_loop_new(context, FALSE);
+
+    if (g_mkdir_with_parents(data_directory, 0700) || g_mkdir_with_parents(cache_directory, 0700)) {
+        *error_message = g_strdup("failed to create WPE profile directories");
+        goto out;
+    }
+
+    display = wpe_display_headless_new();
+    if (!display) {
+        *error_message = g_strdup("failed to create WPE display");
+        goto out;
+    }
+    web_context = webkit_web_context_new();
+    network_session = webkit_network_session_new(data_directory, cache_directory);
+    if (!web_context || !network_session) {
+        *error_message = g_strdup("failed to create WPE web context or network session");
+        goto out;
+    }
+
+    for (uint32_t iteration = 0; iteration < views; iteration++) {
+        uint32_t descriptors;
+        uint32_t descendants;
+
+        memset(report, 0, sizeof(*report));
+        report->sandbox_tools_available =
+            g_find_program_in_path("bwrap") != NULL && g_find_program_in_path("xdg-dbus-proxy") != NULL;
+        capture_display_capabilities(report, display);
+        if (!run_view(
+                context,
+                loop,
+                display,
+                web_context,
+                network_session,
+                uri,
+                TRUE,
+                report,
+                error_message
+            ))
+            goto out;
+
+        if (views == 1)
+            continue;
+        // WebKit's Linux memory monitor opens its permanent files after its
+        // first five-second poll, so establish the baseline after it starts.
+        g_usleep(iteration ? 250000 : 5250000);
+        while (g_main_context_pending(context))
+            g_main_context_iteration(context, FALSE);
+        if (!sandboxed_descendant_count(&descendants)) {
+            *error_message = g_strdup("failed to count WPE sandbox descendants");
+            goto out;
+        }
+        if (descendants) {
+            *error_message = g_strdup("WPE sandbox descendants remained after view teardown");
+            goto out;
+        }
+        if (!open_file_descriptor_count(&descriptors)) {
+            *error_message = g_strdup("failed to count open file descriptors");
+            goto out;
+        }
+        if (iteration == 1)
+            fd_baseline = descriptors;
+        else if (iteration > 1 && descriptors > fd_baseline) {
+            *error_message = g_strdup_printf(
+                "WPE view lifecycles increased open file descriptors: %u > %u",
+                descriptors,
+                fd_baseline
+            );
+            goto out;
+        }
+        fd_after = descriptors;
+    }
+    report->views = views;
+    report->fd_baseline = fd_baseline;
+    report->fd_after = fd_after;
+
+out:
     if (network_session)
         g_object_unref(network_session);
     if (web_context)
         g_object_unref(web_context);
     if (display)
         g_object_unref(display);
-    if (state.loop)
-        g_main_loop_unref(state.loop);
-    g_main_context_pop_thread_default(state.context);
-    g_main_context_unref(state.context);
+    if (loop)
+        g_main_loop_unref(loop);
+    g_main_context_pop_thread_default(context);
+    g_main_context_unref(context);
 
-    if (state.error_message) {
-        *error_message = state.error_message;
-        return 1;
-    }
-
-    return 0;
+    return *error_message ? 1 : 0;
 }
 
 void fjord_wpe_smoke_free_error(char *error_message) {

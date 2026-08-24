@@ -17,6 +17,7 @@ RUN printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "$
         libxkbcommon \
         ninja \
         pkgconf \
+        ripgrep \
         rustup \
         sway \
         ttf-dejavu \

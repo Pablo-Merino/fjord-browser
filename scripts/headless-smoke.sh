@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 RUNTIME_DIR=
-SWAY_LOG="$ROOT/artifacts/screenshots/runs/sway.log"
+SWAY_LOG="$ROOT/artifacts/reports/runs/sway.log"
 SCREENSHOT="$ROOT/artifacts/screenshots/runs/headless-smoke.png"
-VULKAN_INFO="$ROOT/artifacts/screenshots/runs/vulkaninfo.txt"
+VULKAN_INFO="$ROOT/artifacts/reports/runs/vulkaninfo.txt"
 
 cleanup() {
     if [[ -n "${SWAY_PID:-}" ]]; then
@@ -18,6 +18,7 @@ trap cleanup EXIT
 
 RUNTIME_DIR=$(mktemp -d)
 mkdir -p "$(dirname -- "$SCREENSHOT")"
+mkdir -p "$(dirname -- "$SWAY_LOG")"
 chmod 700 "$RUNTIME_DIR"
 
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
@@ -43,7 +44,7 @@ fi
 WAYLAND_DISPLAY=$(basename -- "${sockets[0]}")
 export WAYLAND_DISPLAY
 vulkaninfo --summary >"$VULKAN_INFO"
-grep -q "llvmpipe" "$VULKAN_INFO"
+rg -q "llvmpipe" "$VULKAN_INFO"
 grim "$SCREENSHOT"
 test -s "$SCREENSHOT"
 printf 'Captured %s\n' "$SCREENSHOT"

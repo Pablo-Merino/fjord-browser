@@ -21,6 +21,7 @@ item to active scope only when its trigger is real.
 | Workspaces or split views | A repeated workflow proves they help |
 | Prewarmed or suspended tabs | Measurements show a speed, memory, or battery problem |
 | Hard performance budgets | Measurements are stable enough to compare reliably |
+| Debug CPU and memory graphs | Gate measurements need ongoing desktop diagnostics |
 | Configuration hot reload | Restarting for a change becomes a real problem |
 | Hyprland IPC | A feature needs compositor state or commands |
 | More display, GPU, and accessibility testing | Fjord prepares for beta or a real issue appears |

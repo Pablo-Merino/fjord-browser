@@ -24,10 +24,13 @@ ensure_image() {
 
 run_container() {
     local needs_wpe_sandbox=$1
+    local needs_dri=$2
+    shift
     shift
     ensure_image
 
     local tty=()
+    local devices=()
     local security=(--security-opt seccomp=unconfined --security-opt apparmor=unconfined)
     if [[ -t 0 && -t 1 ]]; then
         tty=(-it)
@@ -36,8 +39,11 @@ run_container() {
     if [[ $needs_wpe_sandbox == true ]]; then
         security=(--privileged)
     fi
+    if [[ $needs_dri == true ]]; then
+        devices=(--device /dev/dri)
+    fi
 
-    docker run --rm --init "${tty[@]}" "${security[@]}" \
+    docker run --rm --init "${tty[@]}" "${security[@]}" "${devices[@]}" \
         --shm-size=1g \
         --security-opt seccomp=unconfined \
         --security-opt apparmor=unconfined \
@@ -48,11 +54,15 @@ run_container() {
 }
 
 run() {
-    run_container false "$@"
+    run_container false false "$@"
 }
 
 run_wpe() {
-    run_container true "$@"
+    run_container true false "$@"
+}
+
+run_wpe_hardware() {
+    run_container true true "$@"
 }
 
 command=${1:-help}
@@ -70,6 +80,7 @@ case "$command" in
     wpe-smoke) run_wpe bash scripts/wpe-smoke.sh ;;
     wpe-smoke-network) run_wpe bash scripts/wpe-smoke.sh --network ;;
     wpe-stress) run_wpe bash scripts/wpe-stress.sh ;;
+    wpe-hardware) run_wpe_hardware bash scripts/wpe-hardware.sh ;;
     run) run "$@" ;;
     *)
         cat <<'EOF'
@@ -84,9 +95,10 @@ Commands:
   clippy          Run Clippy with warnings denied
   verify          Run all static and test checks
   headless-smoke  Start headless Sway and capture a blank compositor frame
-  wpe-smoke       Run the sandboxed standalone WPE lifecycle smoke test
-  wpe-smoke-network  Run the WPE lifecycle smoke test against example.com
-  wpe-stress       Repeat the standalone WPE lifecycle test in fresh processes
+    wpe-smoke       Run the sandboxed standalone WPE lifecycle smoke test
+    wpe-smoke-network  Run the WPE lifecycle smoke test against example.com
+    wpe-stress      Repeat WPE view lifecycles in one process and check file descriptors
+    wpe-hardware    Run the WPE lifecycle smoke test with direct DRM access
   run <command>   Run an arbitrary command in the development image
 EOF
         ;;

@@ -30,6 +30,9 @@ struct Report {
     planes: u32,
     preferred_format: u32,
     preferred_format_count: u32,
+    views: u32,
+    fd_baseline: u32,
+    fd_after: u32,
     modifier: u64,
     preferred_modifier: u64,
     buffer_kind: [c_char; 16],
@@ -56,6 +59,7 @@ unsafe extern "C" {
         data_directory: *const c_char,
         cache_directory: *const c_char,
         uri: *const c_char,
+        views: u32,
         report: *mut Report,
         error_message: *mut *mut c_char,
     ) -> i32;
@@ -67,7 +71,11 @@ fn profile_directory() -> PathBuf {
     std::env::temp_dir().join(format!("fjord-wpe-smoke-{}", std::process::id()))
 }
 
-fn run_smoke(profile: PathBuf, uri: Option<&str>) -> Result<Report, String> {
+fn run_smoke(profile: PathBuf, uri: Option<&str>, views: u32) -> Result<Report, String> {
+    if std::mem::size_of::<Report>() != unsafe { fjord_wpe_smoke_report_size() } {
+        return Err("Rust and C WPE smoke report layouts differ".into());
+    }
+
     let data = profile.join("data");
     let cache = profile.join("cache");
     let data =
@@ -86,6 +94,7 @@ fn run_smoke(profile: PathBuf, uri: Option<&str>) -> Result<Report, String> {
             data.as_ptr(),
             cache.as_ptr(),
             uri.as_ref().map_or(std::ptr::null(), |uri| uri.as_ptr()),
+            views,
             &mut report,
             &mut error_message,
         )
@@ -107,12 +116,18 @@ fn run_smoke(profile: PathBuf, uri: Option<&str>) -> Result<Report, String> {
     }
 }
 
+fn run_stress(profile: PathBuf, uri: Option<&str>) -> Result<Report, String> {
+    run_smoke(profile, uri, 7)
+}
+
 fn main() -> Result<(), String> {
     let mut uri = None;
+    let mut stress = false;
 
     for argument in std::env::args().skip(1) {
         match argument.as_str() {
             "--network" => uri = Some("https://example.com/"),
+            "--stress" => stress = true,
             _ => return Err(format!("unknown argument: {argument}")),
         }
     }
@@ -121,16 +136,19 @@ fn main() -> Result<(), String> {
     let worker_profile = profile.clone();
     let result = thread::Builder::new()
         .name("fjord-wpe-smoke".into())
-        .spawn(move || run_smoke(worker_profile, uri))
+        .spawn(move || {
+            if stress {
+                run_stress(worker_profile, uri).map(|report| (report, true))
+            } else {
+                run_smoke(worker_profile, uri, 1).map(|report| (report, false))
+            }
+        })
         .map_err(|error| error.to_string())?
         .join()
         .map_err(|_| "WPE smoke thread panicked".to_owned())?;
-    let report = result?;
-    fs::remove_dir_all(&profile).map_err(|error| error.to_string())?;
-
-    if std::mem::size_of::<Report>() != unsafe { fjord_wpe_smoke_report_size() } {
-        return Err("Rust and C WPE smoke report layouts differ".into());
-    }
+    let cleanup = fs::remove_dir_all(&profile).map_err(|error| error.to_string());
+    let (report, stress) = result?;
+    cleanup?;
 
     let buffer_kind = unsafe { CStr::from_ptr(report.buffer_kind.as_ptr()) }
         .to_string_lossy()
@@ -168,15 +186,19 @@ fn main() -> Result<(), String> {
         "render_node={}",
         unsafe { CStr::from_ptr(report.render_node.as_ptr()) }.to_string_lossy()
     );
-    println!("termination_reason={}", report.termination_reason);
+    if report.web_process_terminated {
+        println!("termination_reason={}", report.termination_reason);
+    }
+    if stress {
+        println!("in_process_views={}", report.views);
+        println!("fd_baseline={}", report.fd_baseline);
+        println!("fd_after={}", report.fd_after);
+    }
     if !report.sandbox_tools_available {
         return Err("WPE sandbox tools are unavailable".into());
     }
     if !report.sandbox_verified {
         return Err("WPE sandbox did not create an isolated child process".into());
-    }
-    if report.termination_reason != 2 {
-        return Err("WPE web process did not terminate through the requested API path".into());
     }
     if !report.committed
         || !report.finished
@@ -185,7 +207,7 @@ fn main() -> Result<(), String> {
         || !report.buffers_changed
         || !report.buffer_rendered
         || !report.buffer_released
-        || !report.web_process_terminated
+        || (!stress && !report.web_process_terminated)
     {
         return Err("WPE smoke report is missing required lifecycle events".into());
     }

@@ -2,8 +2,12 @@
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-ARTIFACT_DIR="$ROOT/artifacts/screenshots/runs/gate1"
-REPORT="$ARTIFACT_DIR/wpe-smoke.txt"
+ARTIFACT_DIR="$ROOT/artifacts/reports/runs/gate1"
+if [[ ${1:-} == --network ]]; then
+    REPORT="$ARTIFACT_DIR/wpe-smoke-network.txt"
+else
+    REPORT="$ARTIFACT_DIR/wpe-smoke.txt"
+fi
 
 mkdir -p "$ARTIFACT_DIR"
 

@@ -61,9 +61,9 @@ The WPE checks are separate:
 ./scripts/dev.sh wpe-stress
 ```
 
-Routine screenshots and reports are saved under `artifacts/screenshots/runs/`.
-They are not committed. Reviewed screenshots may go in
-`artifacts/screenshots/baselines/`.
+Routine screenshots are saved under `artifacts/screenshots/runs/`. Reports are
+saved under `artifacts/reports/runs/`. They are not committed. Reviewed
+screenshots may go in `artifacts/screenshots/baselines/`.
 
 ## License
 
