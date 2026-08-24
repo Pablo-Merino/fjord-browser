@@ -19,6 +19,7 @@ struct Report {
     sandbox_verified: bool,
     explicit_sync: bool,
     dma_buf_advertised: bool,
+    egl_imported: bool,
     termination_reason: i32,
     platform_major: u32,
     platform_minor: u32,
@@ -57,6 +58,7 @@ impl Default for Report {
 #[link(name = "gobject-2.0")]
 #[link(name = "gio-2.0")]
 #[link(name = "glib-2.0")]
+#[link(name = "EGL")]
 unsafe extern "C" {
     fn fjord_wpe_smoke_run(
         data_directory: *const c_char,
@@ -179,6 +181,7 @@ fn main() -> Result<(), String> {
     println!("planes={}", report.planes);
     println!("modifier=0x{:016x}", report.modifier);
     println!("dma_buf_advertised={}", report.dma_buf_advertised);
+    println!("egl_imported={}", report.egl_imported);
     println!("preferred_format_count={}", report.preferred_format_count);
     println!("preferred_format=0x{:08x}", report.preferred_format);
     println!("preferred_modifier=0x{:016x}", report.preferred_modifier);

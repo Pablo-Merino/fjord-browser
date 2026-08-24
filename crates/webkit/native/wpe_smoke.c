@@ -1,6 +1,8 @@
 #include "wpe_smoke.h"
 
 #include <dirent.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <fcntl.h>
 #include <glib.h>
 #include <limits.h>
@@ -116,6 +118,102 @@ static void capture_display_capabilities(FjordWpeSmokeReport *report, WPEDisplay
         if (modifiers && modifiers->len)
             report->preferred_modifier = g_array_index(modifiers, guint64, 0);
     }
+}
+
+static gboolean verify_egl_import(
+    WPEDisplay *wpe_display,
+    FjordWpeSmokeReport *report,
+    char **error_message
+) {
+    EGLDisplay display;
+    EGLImageKHR image;
+    EGLint attributes[48];
+    GError *error = NULL;
+    PFNEGLCREATEIMAGEKHRPROC create_image;
+    PFNEGLDESTROYIMAGEKHRPROC destroy_image;
+    guint attribute = 0;
+
+    if (g_strcmp0(report->buffer_kind, "dma-buf"))
+        return TRUE;
+
+    display = wpe_display_get_egl_display(wpe_display, &error);
+    if (!display) {
+        *error_message = g_strdup(error ? error->message : "failed to get WPE EGL display");
+        g_clear_error(&error);
+        return FALSE;
+    }
+    create_image = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    destroy_image = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    if (!create_image || !destroy_image) {
+        *error_message = g_strdup("EGL dma-buf import functions are unavailable");
+        return FALSE;
+    }
+
+    attributes[attribute++] = EGL_WIDTH;
+    attributes[attribute++] = report->width;
+    attributes[attribute++] = EGL_HEIGHT;
+    attributes[attribute++] = report->height;
+    attributes[attribute++] = EGL_LINUX_DRM_FOURCC_EXT;
+    attributes[attribute++] = report->format;
+    for (guint plane = 0; plane < report->planes; plane++) {
+        static const EGLint fd_attributes[] = {
+            EGL_DMA_BUF_PLANE0_FD_EXT,
+            EGL_DMA_BUF_PLANE1_FD_EXT,
+            EGL_DMA_BUF_PLANE2_FD_EXT,
+            EGL_DMA_BUF_PLANE3_FD_EXT,
+        };
+        static const EGLint offset_attributes[] = {
+            EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+            EGL_DMA_BUF_PLANE1_OFFSET_EXT,
+            EGL_DMA_BUF_PLANE2_OFFSET_EXT,
+            EGL_DMA_BUF_PLANE3_OFFSET_EXT,
+        };
+        static const EGLint pitch_attributes[] = {
+            EGL_DMA_BUF_PLANE0_PITCH_EXT,
+            EGL_DMA_BUF_PLANE1_PITCH_EXT,
+            EGL_DMA_BUF_PLANE2_PITCH_EXT,
+            EGL_DMA_BUF_PLANE3_PITCH_EXT,
+        };
+        static const EGLint modifier_lo_attributes[] = {
+            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
+            EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT,
+            EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT,
+            EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT,
+        };
+        static const EGLint modifier_hi_attributes[] = {
+            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
+            EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT,
+            EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT,
+            EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT,
+        };
+
+        if (plane >= G_N_ELEMENTS(fd_attributes) || report->dma_buf_fds[plane] < 0) {
+            *error_message = g_strdup("WPE dma-buf plane is unavailable for EGL import");
+            return FALSE;
+        }
+        attributes[attribute++] = fd_attributes[plane];
+        attributes[attribute++] = report->dma_buf_fds[plane];
+        attributes[attribute++] = offset_attributes[plane];
+        attributes[attribute++] = report->offsets[plane];
+        attributes[attribute++] = pitch_attributes[plane];
+        attributes[attribute++] = report->strides[plane];
+        attributes[attribute++] = modifier_lo_attributes[plane];
+        attributes[attribute++] = report->modifier & G_MAXUINT32;
+        attributes[attribute++] = modifier_hi_attributes[plane];
+        attributes[attribute++] = report->modifier >> 32;
+    }
+    attributes[attribute++] = EGL_NONE;
+    image = create_image(display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attributes);
+    if (image == EGL_NO_IMAGE_KHR) {
+        *error_message = g_strdup("EGL rejected WPE dma-buf import");
+        return FALSE;
+    }
+    if (!destroy_image(display, image)) {
+        *error_message = g_strdup("failed to destroy imported EGL image");
+        return FALSE;
+    }
+    report->egl_imported = true;
+    return TRUE;
 }
 
 static gboolean is_descendant_of_self(long process_id) {
@@ -481,6 +579,8 @@ int fjord_wpe_smoke_run(
                 report,
                 error_message
             ))
+            goto out;
+        if (!verify_egl_import(display, report, error_message))
             goto out;
 
         if (views == 1)

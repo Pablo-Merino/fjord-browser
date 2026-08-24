@@ -180,3 +180,18 @@ required to import WPE's i915 CCS dma-buf modifier.
 **Next:** Negotiate a non-CCS WPE modifier that ANV can import, or take the
 WPE Wayland subsurface fallback. Do not add a broad GPUI renderer fork for the
 unsupported modifier path.
+
+## 2026-08-24: Athena EGL DMA-BUF Import
+
+**Changed:** Added an EGL image import probe for duplicated WPE dma-buf planes.
+The probe imports each plane with its format, offset, stride, and modifier, then
+destroys the EGL image before WPE descriptor cleanup.
+
+**Checks:** `dev.sh wpe-smoke` passed locally. `dev.sh wpe-hardware` passed on
+Athena with `egl_imported=true` for the two-plane CCS dma-buf.
+
+**Evidence:** `artifacts/reports/runs/gate1/wpe-hardware.txt` on Athena.
+
+**Next:** Add the approved narrow GPUI GLES renderer feature to sample the EGL
+image directly. Keep the Vulkan path out of scope because ANV lacks
+`VK_EXT_image_drm_format_modifier`.

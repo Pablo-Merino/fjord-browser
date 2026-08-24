@@ -18,6 +18,7 @@ typedef struct {
     bool sandbox_verified;
     bool explicit_sync;
     bool dma_buf_advertised;
+    bool egl_imported;
     int32_t termination_reason;
     uint32_t platform_major;
     uint32_t platform_minor;

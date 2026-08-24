@@ -19,10 +19,14 @@ fn main() {
         .atleast_version("2.52")
         .probe("wpe-platform-headless-2.0")
         .expect("WPEPlatform headless 2.52.x development files are required");
+    let egl = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe("egl")
+        .expect("EGL development files are required");
 
     let mut native = cc::Build::new();
     native.file("native/wpe_smoke.c").warnings(true);
-    for library in [&webkit, &platform, &headless] {
+    for library in [&webkit, &platform, &headless, &egl] {
         for include_path in &library.include_paths {
             native.include(include_path);
         }
@@ -31,7 +35,7 @@ fn main() {
 
     let mut link_paths = BTreeSet::new();
     let mut libraries = BTreeSet::new();
-    for library in [&webkit, &platform, &headless] {
+    for library in [&webkit, &platform, &headless, &egl] {
         for link_path in &library.link_paths {
             link_paths.insert(link_path);
         }
@@ -45,6 +49,7 @@ fn main() {
     for library in libraries {
         println!("cargo:rustc-link-lib=dylib={library}");
     }
+    println!("cargo:rustc-link-lib=dylib=EGL");
 
     println!("cargo:rustc-env=FJORD_WPE_BUILD_VERSION={}", webkit.version);
 }
