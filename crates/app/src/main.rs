@@ -4,11 +4,19 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, Raw
 
 struct Fjord {
     handles_logged: bool,
+    subsurface_probe_pending: bool,
 }
 
 impl Render for Fjord {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.handles_logged {
+            println!("GPUI Wayland handles ready");
+            self.handles_logged = true;
+            cx.on_next_frame(window, |view, _window, cx| {
+                view.subsurface_probe_pending = true;
+                cx.notify();
+            });
+        } else if self.subsurface_probe_pending {
             let display = window
                 .display_handle()
                 .expect("GPUI window has a display handle");
@@ -17,10 +25,14 @@ impl Render for Fjord {
                 .expect("GPUI window has a surface handle");
 
             let RawDisplayHandle::Wayland(display) = display.as_raw() else {
-                panic!("GPUI window is not backed by Wayland");
+                eprintln!("GPUI Wayland subsurface probe unavailable: non-Wayland display");
+                self.subsurface_probe_pending = false;
+                return div().size_full();
             };
             let RawWindowHandle::Wayland(surface) = surface.as_raw() else {
-                panic!("GPUI window is not backed by Wayland");
+                eprintln!("GPUI Wayland subsurface probe unavailable: non-Wayland surface");
+                self.subsurface_probe_pending = false;
+                return div().size_full();
             };
 
             unsafe {
@@ -29,9 +41,11 @@ impl Render for Fjord {
                     surface.surface.as_ptr(),
                 )
             }
-            .expect("GPUI Wayland subsurface probe");
-            println!("GPUI Wayland subsurface protocol ready");
-            self.handles_logged = true;
+            .map_or_else(
+                |error| eprintln!("GPUI Wayland subsurface probe unavailable: {error}"),
+                |_| println!("GPUI Wayland subsurface protocol ready"),
+            );
+            self.subsurface_probe_pending = false;
         }
 
         div().size_full()
@@ -43,6 +57,7 @@ fn main() {
         cx.open_window(WindowOptions::default(), |_, cx| {
             cx.new(|_| Fjord {
                 handles_logged: false,
+                subsurface_probe_pending: false,
             })
         })
         .expect("open Fjord window");

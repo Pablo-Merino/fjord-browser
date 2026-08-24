@@ -3,6 +3,8 @@
 #include <dirent.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <gbm.h>
+#include <drm_fourcc.h>
 #include <fcntl.h>
 #include <glib.h>
 #include <limits.h>
@@ -14,6 +16,7 @@
 #include <wpe/headless/wpe-headless.h>
 #include <wpe/webkit.h>
 #include <wayland-client-protocol.h>
+#include "linux-dmabuf-client-protocol.h"
 
 typedef struct {
     GMainContext *context;
@@ -50,7 +53,73 @@ static void reset_report(FjordWpeSmokeReport *report) {
 typedef struct {
     struct wl_compositor *compositor;
     struct wl_subcompositor *subcompositor;
+    struct zwp_linux_dmabuf_v1 *dmabuf;
+    uint32_t dmabuf_version;
+    gboolean supports_linear_xrgb;
 } SubsurfaceProbe;
+
+typedef struct {
+    gboolean released;
+} BufferRelease;
+
+typedef struct {
+    struct wl_buffer *buffer;
+    gboolean failed;
+} BufferCreation;
+
+static void buffer_release(void *data, struct wl_buffer *buffer) {
+    (void)buffer;
+    ((BufferRelease *)data)->released = TRUE;
+}
+
+static const struct wl_buffer_listener buffer_listener = {
+    .release = buffer_release,
+};
+
+static void buffer_created(
+    void *data,
+    struct zwp_linux_buffer_params_v1 *params,
+    struct wl_buffer *buffer
+) {
+    (void)params;
+    ((BufferCreation *)data)->buffer = buffer;
+}
+
+static void buffer_creation_failed(void *data, struct zwp_linux_buffer_params_v1 *params) {
+    (void)params;
+    ((BufferCreation *)data)->failed = TRUE;
+}
+
+static const struct zwp_linux_buffer_params_v1_listener buffer_creation_listener = {
+    .created = buffer_created,
+    .failed = buffer_creation_failed,
+};
+
+static void dmabuf_format(void *data, struct zwp_linux_dmabuf_v1 *dmabuf, uint32_t format) {
+    (void)data;
+    (void)dmabuf;
+    (void)format;
+}
+
+static void dmabuf_modifier(
+    void *data,
+    struct zwp_linux_dmabuf_v1 *dmabuf,
+    uint32_t format,
+    uint32_t modifier_high,
+    uint32_t modifier_low
+) {
+    SubsurfaceProbe *probe = data;
+
+    (void)dmabuf;
+    if (format == DRM_FORMAT_XRGB8888 &&
+        (((uint64_t)modifier_high << 32) | modifier_low) == DRM_FORMAT_MOD_LINEAR)
+        probe->supports_linear_xrgb = TRUE;
+}
+
+static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
+    .format = dmabuf_format,
+    .modifier = dmabuf_modifier,
+};
 
 static void subsurface_probe_global(
     void *data,
@@ -65,6 +134,17 @@ static void subsurface_probe_global(
         probe->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, MIN(version, 4));
     else if (!g_strcmp0(interface, "wl_subcompositor"))
         probe->subcompositor = wl_registry_bind(registry, name, &wl_subcompositor_interface, 1);
+    else if (!g_strcmp0(interface, "zwp_linux_dmabuf_v1")) {
+        probe->dmabuf_version = MIN(version, 3);
+        probe->dmabuf = wl_registry_bind(
+            registry,
+            name,
+            &zwp_linux_dmabuf_v1_interface,
+            probe->dmabuf_version
+        );
+        if (probe->dmabuf_version >= 3)
+            zwp_linux_dmabuf_v1_add_listener(probe->dmabuf, &dmabuf_listener, probe);
+    }
 }
 
 static void subsurface_probe_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
@@ -81,10 +161,23 @@ static const struct wl_registry_listener subsurface_probe_registry_listener = {
 int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, char **error_message) {
     struct wl_display *display = display_ptr;
     struct wl_surface *parent_surface = parent_surface_ptr;
-    struct wl_registry *registry;
+    struct wl_registry *registry = NULL;
+    struct wl_event_queue *queue = NULL;
+    struct wl_proxy *display_wrapper = NULL;
     struct wl_surface *surface = NULL;
     struct wl_subsurface *subsurface = NULL;
     struct wl_region *empty_input_region = NULL;
+    struct zwp_linux_buffer_params_v1 *params = NULL;
+    struct wl_buffer *buffer = NULL;
+    struct gbm_device *gbm = NULL;
+    struct gbm_bo *bo = NULL;
+    const char *render_node = g_getenv("FJORD_DRM_RENDER_NODE");
+    uint64_t requested_modifier = DRM_FORMAT_MOD_LINEAR;
+    uint64_t modifier;
+    int drm_fd = -1;
+    int buffer_fd = -1;
+    BufferRelease release = { 0 };
+    BufferCreation creation = { 0 };
     SubsurfaceProbe probe = { 0 };
 
     g_return_val_if_fail(display, 1);
@@ -92,10 +185,27 @@ int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, 
     g_return_val_if_fail(error_message, 1);
 
     *error_message = NULL;
-    registry = wl_display_get_registry(display);
+    queue = wl_display_create_queue(display);
+    display_wrapper = wl_proxy_create_wrapper(display);
+    if (!queue || !display_wrapper) {
+        *error_message = g_strdup("failed to create Wayland subsurface event queue");
+        goto out;
+    }
+    wl_proxy_set_queue(display_wrapper, queue);
+    registry = wl_display_get_registry((struct wl_display *)display_wrapper);
+    wl_proxy_wrapper_destroy(display_wrapper);
+    display_wrapper = NULL;
     wl_registry_add_listener(registry, &subsurface_probe_registry_listener, &probe);
-    if (wl_display_roundtrip(display) < 0 || !probe.compositor || !probe.subcompositor) {
-        *error_message = g_strdup("Wayland compositor does not support subsurfaces");
+    if (wl_display_roundtrip_queue(display, queue) < 0 || !probe.compositor || !probe.subcompositor || !probe.dmabuf) {
+        *error_message = g_strdup("Wayland compositor does not support dma-buf subsurfaces");
+        goto out;
+    }
+    if (probe.dmabuf_version < 3) {
+        *error_message = g_strdup("Wayland compositor lacks dma-buf modifier support");
+        goto out;
+    }
+    if (wl_display_roundtrip_queue(display, queue) < 0 || !probe.supports_linear_xrgb) {
+        *error_message = g_strdup("Wayland compositor does not advertise linear XRGB dma-bufs");
         goto out;
     }
 
@@ -108,24 +218,102 @@ int fjord_wayland_subsurface_probe(void *display_ptr, void *parent_surface_ptr, 
     }
     wl_surface_set_input_region(surface, empty_input_region);
     wl_subsurface_set_desync(subsurface);
+
+    drm_fd = open(render_node ? render_node : "/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+    gbm = drm_fd >= 0 ? gbm_create_device(drm_fd) : NULL;
+    bo = gbm ? gbm_bo_create_with_modifiers(gbm, 64, 64, DRM_FORMAT_XRGB8888, &requested_modifier, 1) : NULL;
+    buffer_fd = bo ? gbm_bo_get_fd(bo) : -1;
+    if (!bo || buffer_fd < 0) {
+        *error_message = g_strdup("failed to allocate a linear GBM dma-buf");
+        goto out;
+    }
+    modifier = gbm_bo_get_modifier(bo);
+    params = zwp_linux_dmabuf_v1_create_params(probe.dmabuf);
+    zwp_linux_buffer_params_v1_add(
+        params,
+        buffer_fd,
+        0,
+        gbm_bo_get_offset(bo, 0),
+        gbm_bo_get_stride(bo),
+        modifier >> 32,
+        modifier & G_MAXUINT32
+    );
+    zwp_linux_buffer_params_v1_add_listener(params, &buffer_creation_listener, &creation);
+    zwp_linux_buffer_params_v1_create(params, 64, 64, DRM_FORMAT_XRGB8888, 0);
+    if (wl_display_roundtrip_queue(display, queue) < 0) {
+        *error_message = g_strdup("Wayland connection failed while creating the GBM dma-buf");
+        goto out;
+    }
+    if (creation.failed) {
+        *error_message = g_strdup("Wayland compositor rejected the GBM dma-buf");
+        goto out;
+    }
+    buffer = creation.buffer;
+    if (!buffer) {
+        *error_message = g_strdup("Wayland compositor did not create a GBM dma-buf buffer");
+        goto out;
+    }
+    buffer = creation.buffer;
+    wl_buffer_add_listener(buffer, &buffer_listener, &release);
+    wl_surface_attach(surface, buffer, 0, 0);
+    wl_surface_damage(surface, 0, 0, 64, 64);
     wl_surface_commit(surface);
-    wl_surface_commit(parent_surface);
-    if (wl_display_flush(display) < 0)
+    if (wl_display_flush(display) < 0) {
         *error_message = g_strdup("failed to flush Wayland subsurface");
+        goto out;
+    }
+    buffer_fd = -1; // libwayland closes the sent fd during the successful flush.
+    if (wl_display_roundtrip_queue(display, queue) < 0) {
+        *error_message = g_strdup("failed to present the GBM dma-buf");
+        goto out;
+    }
+    wl_surface_attach(surface, NULL, 0, 0);
+    wl_surface_commit(surface);
+    if (wl_display_flush(display) < 0) {
+        *error_message = g_strdup("failed to detach the GBM dma-buf");
+        goto out;
+    }
+    for (guint attempt = 0; attempt < 2 && !release.released; attempt++) {
+        if (wl_display_roundtrip_queue(display, queue) < 0) {
+            *error_message = g_strdup("failed to dispatch Wayland subsurface events");
+            goto out;
+        }
+    }
+    if (!release.released)
+        *error_message = g_strdup("Wayland compositor did not release the GBM dma-buf");
 
 out:
+    if (display_wrapper)
+        wl_proxy_wrapper_destroy(display_wrapper);
     if (empty_input_region)
         wl_region_destroy(empty_input_region);
     if (subsurface)
         wl_subsurface_destroy(subsurface);
     if (surface)
         wl_surface_destroy(surface);
+    if (buffer)
+        wl_buffer_destroy(buffer);
+    if (params)
+        zwp_linux_buffer_params_v1_destroy(params);
+    if (buffer_fd >= 0)
+        close(buffer_fd);
+    if (bo)
+        gbm_bo_destroy(bo);
+    if (gbm)
+        gbm_device_destroy(gbm);
+    if (drm_fd >= 0)
+        close(drm_fd);
+    if (probe.dmabuf)
+        zwp_linux_dmabuf_v1_destroy(probe.dmabuf);
     if (probe.subcompositor)
         wl_subcompositor_destroy(probe.subcompositor);
     if (probe.compositor)
         wl_compositor_destroy(probe.compositor);
     if (registry)
         wl_registry_destroy(registry);
+    wl_display_flush(display);
+    if (queue)
+        wl_event_queue_destroy(queue);
 
     return *error_message ? 1 : 0;
 }

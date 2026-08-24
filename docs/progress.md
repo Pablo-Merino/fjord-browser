@@ -234,3 +234,18 @@ ready`.
 
 **Next:** Attach a static dma-buf to the child surface and wait for
 `wl_buffer.release` before connecting live WPE frame ownership.
+
+## 2026-08-24: GPUI GBM DMA-BUF Subsurface
+
+**Changed:** Generated the standard `linux-dmabuf` client protocol at build
+time. The Wayland probe allocates a linear GBM dma-buf, attaches it to the
+desynced GPUI child surface, detaches it, and requires `wl_buffer.release`.
+
+**Checks:** `dev.sh verify` passed locally. `dev.sh gpui-smoke` passed on
+Athena's Hyprland session.
+
+**Evidence:** Athena GPUI smoke output: `GPUI Wayland subsurface protocol
+ready` after the GBM buffer release check.
+
+**Next:** Attach live WPE dma-buf frames to the GPUI-owned child surface and
+release each WPE frame from `wl_buffer.release`.
