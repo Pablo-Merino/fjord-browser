@@ -1,69 +1,71 @@
 # Fjord
 
-## Mission
+## Purpose
 
-Build a fast, keyboard-first Wayland browser whose native GPUI chrome belongs
-in Omarchy and Hyprland while WPE WebKit owns standards-based web content.
+Fjord is a keyboard-first Wayland browser for Omarchy and Hyprland. GPUI owns
+the browser interface. WPE WebKit owns webpage content.
 
-## Audience
+## Current Scope
 
-The first audience is one technical Omarchy user evaluating Fjord as a
-secondary browser. Broader distribution starts only after the architecture and
-core compatibility prove reliable.
+Finish the technical gates before building the personal alpha. The alpha is a
+secondary browser for one user, not a replacement for Chrome or a public
+release.
 
-## Scope
+Do not add Chromium, permanent CPU frame copies, a custom engine, extensions,
+DRM, default-browser registration, packaging, or speculative plugin systems.
 
-The current scope is the technical kill gates followed by the personal MVP
-alpha defined in `docs/`. GPUI owns browser UI, WPE WebKit owns web content, and
-the application targets Linux, Wayland, and Hyprland.
+## Source Of Truth
 
-## Out of Scope
+Read these files in this order:
 
-Do not add Chromium, permanent CPU frame copies, a custom rendering engine,
-Chrome extensions, DRM guarantees, default-browser registration, public
-packaging, or speculative plugin systems. `docs/improvements.md` defines when
-deferred work may enter scope.
+1. `docs/kill-gates.md`
+2. `docs/mvp-alpha.md`
+3. `docs/improvements.md`
+4. `docs/PRD.md`
 
-## Languages
+Use `docs/progress.md` to see what changed, what passed, and what remains.
+When documents conflict, the earlier file in this list wins.
 
-- **Client-facing**: English
-- **End-user-facing**: English
+## Code Boundaries
 
-## Reference Projects
+- Keep WPE and GObject values in `crates/webkit`.
+- Keep browser state and GPUI chrome in `crates/app`.
+- Add a crate or abstraction only after a real second use proves it is needed.
+- Pin GPUI, Rust, Arch packages, and WPE. Upgrade them separately.
+- Do not weaken sandboxing, TLS checks, input validation, or log redaction to
+  make a test pass.
+- Follow the fallback steps in `docs/kill-gates.md` if direct GPU frame sharing
+  needs more than the approved narrow GPUI renderer change.
 
-- [**Zed**](https://github.com/zed-industries/zed): mirror GPUI ownership,
-  actions, Wayland platform, and test patterns from the exact pinned revision.
-- [**Cog**](https://github.com/Igalia/cog): consult WPE lifecycle, input, and
-  platform integration patterns without copying its UI architecture.
+## Development Workflow
 
-## Sources Of Truth
-
-- `docs/kill-gates.md` defines go/no-go technical acceptance and comes first.
-- `docs/mvp-alpha.md` defines the approved personal alpha.
-- `docs/improvements.md` owns deferred work and promotion triggers.
-- `docs/PRD.md` is background context; focused documents supersede conflicts.
-
-## Development
-
-- Use `./scripts/dev.sh` so builds run in the pinned Arch environment.
-- Run `./scripts/dev.sh verify` before reporting Rust changes complete.
-- The Gate 1 WPE commands (`wpe-smoke`, `wpe-smoke-network`, and `wpe-stress`)
-  use a privileged outer Docker container only to verify WPE's nested Bubblewrap
-  sandbox. Do not generalize that exception.
-- Prefer headless Wayland checks and repository-local screenshots; defer laptop
-  tests until a gate specifically requires i915, Hyprland, fcitx, or portals.
-- Keep routine captures in `artifacts/screenshots/runs/` and commit only reviewed
+- Use `./scripts/dev.sh` for builds and checks.
+- Run `./scripts/dev.sh verify` before reporting Rust work complete.
+- Prefer headless Wayland checks first.
+- Use the Omarchy laptop only when a gate needs i915, Hyprland, fcitx (text
+  input), desktop portals, or other real desktop behavior.
+- The Gate 1 WPE commands use a privileged outer Docker container only to test
+  WPE's nested Bubblewrap sandbox. Do not extend that exception elsewhere.
+- Keep routine captures in `artifacts/screenshots/runs/`. Commit only reviewed
   baselines from `artifacts/screenshots/baselines/`.
 
-## Working Agreements
+## Documentation Rules
 
-- Make the smallest complete change and avoid speculative abstractions.
-- Keep WPE and GObject values inside `crates/webkit`.
-- Keep browser state and GPUI chrome inside `crates/app` until a proven boundary
-  requires another crate.
-- Pin GPUI, Rust, Arch packages, and WPE versions; review upgrades separately.
-- Never weaken sandboxing, TLS, input validation, or redaction to make a test
-  pass.
-- Stop and reassess if zero-copy composition requires a broad GPUI fork.
-- Update durable documentation when behavior, architecture, commands, or scope
-  changes.
+- Write README and docs for a general reader first.
+- Use short sentences and plain English.
+- Avoid specialist terms when a simple phrase works. Define necessary terms once.
+- Keep raw diagnostics in artifacts and source comments, not public documents.
+- Update the relevant planning document when scope or behavior changes.
+- Add an entry to `docs/progress.md` after every meaningful change. Include what
+  changed, checks run, evidence location, and the next blocker or task.
+
+## Language
+
+- Client-facing: English
+- End-user-facing: English
+
+## References
+
+- [Zed](https://github.com/zed-industries/zed): GPUI patterns and the pinned
+  Wayland implementation.
+- [Cog](https://github.com/Igalia/cog): WPE lifecycle and input patterns.
