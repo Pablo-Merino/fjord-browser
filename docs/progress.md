@@ -135,3 +135,19 @@ views with 23 file descriptors before and after the repeated views.
 
 **Next:** Test direct GPU frames on the i915 laptop before calling Gate 1
 complete.
+
+## 2026-08-24: i915 DMA-BUF Preflight
+
+**Changed:** Ran the standalone WPE lifecycle harness with the i915 laptop's
+DRM devices available in the pinned container.
+
+**Checks:** `dev.sh wpe-hardware` passed. WPE rendered and released an
+`800x600` DMA-BUF from `/dev/dri/card1`; it reported two planes, modifier
+`0x0100000000000004`, and 65 preferred format/modifier pairs. Sandbox
+verification and web-process teardown also passed.
+
+**Evidence:** `artifacts/reports/runs/gate1/wpe-hardware.txt`.
+
+**Next:** Build the approved narrow GPUI Linux renderer path to import WPE's
+DMA-BUF. The current WPE platform does not advertise explicit synchronization,
+so document and validate the available synchronization primitive before import.
