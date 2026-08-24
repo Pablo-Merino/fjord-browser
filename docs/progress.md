@@ -165,3 +165,18 @@ runner closes those duplicated descriptors after reporting.
 
 **Next:** Import and sample the duplicated dma-buf with Vulkan/wgpu on Athena
 before changing GPUI's renderer.
+
+## 2026-08-24: Athena Vulkan Modifier Check
+
+**Changed:** Checked Athena's direct-DRM Vulkan device for the extensions
+required to import WPE's i915 CCS dma-buf modifier.
+
+**Checks:** ANV exposes `VK_EXT_external_memory_dma_buf` and
+`VK_KHR_external_semaphore_fd`, but does not expose
+`VK_EXT_image_drm_format_modifier`.
+
+**Evidence:** Athena direct-DRM `vulkaninfo` extension report.
+
+**Next:** Negotiate a non-CCS WPE modifier that ANV can import, or take the
+WPE Wayland subsurface fallback. Do not add a broad GPUI renderer fork for the
+unsupported modifier path.
