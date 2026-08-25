@@ -254,8 +254,9 @@ release each WPE frame from `wl_buffer.release`.
 
 **Changed:** The GPUI Wayland smoke now creates a WPE headless view, imports
 its live dma-buf into the GPUI-owned child surface, and returns the frame to
-WPE only from `wl_buffer.release`. It repeats this release cycle for three
-consecutive animated WPE frames on the same child surface.
+WPE only from `wl_buffer.release`. It repeats this release cycle for eleven
+animated WPE frames while resizing the WPE toplevel ten times on the same child
+surface.
 
 **Checks:** `dev.sh verify` passed locally. `dev.sh gpui-smoke` passed on
 Athena's Hyprland session.
@@ -263,5 +264,4 @@ Athena's Hyprland session.
 **Evidence:** Athena GPUI smoke output: `GPUI Wayland live WPE subsurface
 smoke ready`.
 
-**Next:** Add resize handling, then exercise two live WPE views with repeated
-switching.
+**Next:** Exercise two live WPE views with repeated switching.

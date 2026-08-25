@@ -70,12 +70,17 @@ typedef struct {
     struct wl_buffer *buffer;
     WPEView *view;
     WPEBuffer *wpe_buffer;
+    WPEToplevel *toplevel;
     GMainLoop *loop;
     char **error_message;
     guint released_frames;
     guint target_frames;
+    guint resize_count;
+    guint target_resizes;
     gboolean in_flight;
 } LiveBuffer;
+
+static void live_buffer_fail(LiveBuffer *live, const char *message);
 
 static void live_buffer_release(void *data, struct wl_buffer *buffer) {
     LiveBuffer *live = data;
@@ -91,6 +96,21 @@ static void live_buffer_release(void *data, struct wl_buffer *buffer) {
     if (live->buffer == buffer) {
         wl_buffer_destroy(live->buffer);
         live->buffer = NULL;
+    }
+    if (live->resize_count < live->target_resizes) {
+        static const gint sizes[][2] = {
+            { 640, 480 },
+            { 1024, 768 },
+            { 800, 600 },
+            { 720, 540 },
+        };
+        const gint *size = sizes[live->resize_count % G_N_ELEMENTS(sizes)];
+
+        live->resize_count++;
+        if (!wpe_toplevel_resize(live->toplevel, size[0], size[1])) {
+            live_buffer_fail(live, "failed to resize the live WPE toplevel");
+            return;
+        }
     }
     if (live->released_frames >= live->target_frames)
         g_main_loop_quit(live->loop);
@@ -879,7 +899,8 @@ static gboolean run_live_subsurface_view(
         .dmabuf = probe->dmabuf,
         .surface = surface,
         .error_message = error_message,
-        .target_frames = 3,
+        .target_frames = 11,
+        .target_resizes = 10,
     };
 
     context = g_main_context_new();
@@ -918,12 +939,14 @@ static gboolean run_live_subsurface_view(
         *error_message = g_strdup("failed to configure WPE headless smoke view");
         goto out;
     }
+    live.toplevel = toplevel;
     g_signal_connect(view, "buffer-rendered", G_CALLBACK(live_buffer_rendered), &live);
     timeout = attach_timeout(context, 15000, G_SOURCE_FUNC(live_buffer_timeout), &live);
     webkit_web_view_load_html(web_view, fixture, "fjord-gate2://fixture/");
     g_main_loop_run(loop);
-    if (!*error_message && live.released_frames != live.target_frames)
-        *error_message = g_strdup("WPE live subsurface did not release every frame");
+    if (!*error_message &&
+        (live.released_frames != live.target_frames || live.resize_count != live.target_resizes))
+        *error_message = g_strdup("WPE live subsurface did not finish every resize frame");
 
 out:
     if (timeout) {
