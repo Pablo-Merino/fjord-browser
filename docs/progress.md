@@ -294,3 +294,17 @@ dma-buf frames still return to WPE only from `wl_buffer.release`.
 bridge ready`.
 
 **Next:** Implement basic forwarded pointer, scroll, keyboard, and focus input.
+
+## 2026-08-25: Basic Pointer Buttons
+
+**Changed:** The persistent GPUI WPE subsurface bridge now forwards root left
+mouse press and release events to WPE at the GPUI event coordinates. The Rust
+and C boundaries reject invalid input and report bridge errors without panics.
+
+**Checks:** `./scripts/dev.sh verify` passed locally.
+
+**Evidence:** Local build, test, and Clippy output from `./scripts/dev.sh verify`.
+Athena startup smoke passed; interactive click confirmation remains pending.
+
+**Next:** Manually confirm page clicks on Athena. Pointer movement, scrolling,
+keyboard input, and focus remain unimplemented.

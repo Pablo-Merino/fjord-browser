@@ -1,4 +1,7 @@
-use gpui::{App, Context, Render, Window, WindowOptions, div, prelude::*};
+use gpui::{
+    App, Context, MouseButton, MouseDownEvent, MouseUpEvent, Render, Window, WindowOptions, div,
+    prelude::*,
+};
 use gpui_platform::application;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
@@ -50,11 +53,40 @@ impl Render for Fjord {
             }
         }
 
-        div().size_full()
+        div()
+            .size_full()
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::forward_pointer_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::forward_pointer_up))
     }
 }
 
 impl Fjord {
+    fn forward_pointer_down(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.forward_pointer_button(true, event.position.x.to_f64(), event.position.y.to_f64());
+    }
+
+    fn forward_pointer_up(
+        &mut self,
+        event: &MouseUpEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.forward_pointer_button(false, event.position.x.to_f64(), event.position.y.to_f64());
+    }
+
+    fn forward_pointer_button(&mut self, pressed: bool, x: f64, y: f64) {
+        if let Some(bridge) = &mut self.bridge
+            && let Err(error) = bridge.pointer_button(pressed, x, y)
+        {
+            eprintln!("GPUI Wayland subsurface bridge pointer forwarding failed: {error}");
+        }
+    }
+
     fn pump_bridge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(bridge) = &mut self.bridge {
             if let Err(error) = bridge.pump() {

@@ -29,6 +29,13 @@ unsafe extern "C" {
         bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
         error_message: *mut *mut c_char,
     ) -> i32;
+    fn fjord_wpe_subsurface_bridge_pointer_button(
+        bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
+        pressed: bool,
+        x: f64,
+        y: f64,
+        error_message: *mut *mut c_char,
+    ) -> i32;
     fn fjord_wpe_subsurface_bridge_free(bridge: *mut FjordWpeSubsurfaceBridgeOpaque);
     fn fjord_wpe_smoke_free_error(error_message: *mut c_char);
 }
@@ -95,6 +102,30 @@ impl WaylandSubsurfaceBridge {
         let mut error_message = std::ptr::null_mut();
         let result =
             unsafe { fjord_wpe_subsurface_bridge_pump(self.0.as_ptr(), &mut error_message) };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(take_error(error_message))
+        }
+    }
+
+    /// Inject a left pointer-button press or release at the view coordinates.
+    pub fn pointer_button(&mut self, pressed: bool, x: f64, y: f64) -> Result<(), String> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err("WPE bridge pointer coordinates must be finite".into());
+        }
+
+        let mut error_message = std::ptr::null_mut();
+        let result = unsafe {
+            fjord_wpe_subsurface_bridge_pointer_button(
+                self.0.as_ptr(),
+                pressed,
+                x,
+                y,
+                &mut error_message,
+            )
+        };
 
         if result == 0 {
             Ok(())
