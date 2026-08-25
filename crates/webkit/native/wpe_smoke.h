@@ -58,6 +58,18 @@ void fjord_wpe_smoke_close_fds(FjordWpeSmokeReport *report);
 
 int fjord_wayland_subsurface_probe(void *display, void *parent_surface, char **error_message);
 
+typedef struct FjordWpeSubsurfaceBridge FjordWpeSubsurfaceBridge;
+
+FjordWpeSubsurfaceBridge *fjord_wpe_subsurface_bridge_new(
+    void *display,
+    void *parent_surface,
+    char **error_message
+);
+
+int fjord_wpe_subsurface_bridge_pump(FjordWpeSubsurfaceBridge *bridge, char **error_message);
+
+void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge);
+
 size_t fjord_wpe_smoke_report_size(void);
 
 #endif

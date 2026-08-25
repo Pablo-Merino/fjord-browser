@@ -1,4 +1,12 @@
-use std::ffi::{CStr, c_char, c_uint, c_void};
+use std::{
+    ffi::{CStr, c_char, c_uint, c_void},
+    ptr::NonNull,
+};
+
+#[repr(C)]
+struct FjordWpeSubsurfaceBridgeOpaque {
+    _private: [u8; 0],
+}
 
 #[link(name = "fjord_wpe_smoke", kind = "static")]
 #[link(name = "EGL")]
@@ -12,6 +20,16 @@ unsafe extern "C" {
         parent_surface: *mut c_void,
         error_message: *mut *mut c_char,
     ) -> i32;
+    fn fjord_wpe_subsurface_bridge_new(
+        display: *mut c_void,
+        parent_surface: *mut c_void,
+        error_message: *mut *mut c_char,
+    ) -> *mut FjordWpeSubsurfaceBridgeOpaque;
+    fn fjord_wpe_subsurface_bridge_pump(
+        bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
+        error_message: *mut *mut c_char,
+    ) -> i32;
+    fn fjord_wpe_subsurface_bridge_free(bridge: *mut FjordWpeSubsurfaceBridgeOpaque);
     fn fjord_wpe_smoke_free_error(error_message: *mut c_char);
 }
 
@@ -51,6 +69,57 @@ pub unsafe fn probe_wayland_subsurface(
         unsafe { fjord_wpe_smoke_free_error(error_message) };
         Err(message)
     }
+}
+
+/// A same-thread WPE view attached to a GPUI-owned Wayland child surface.
+pub struct WaylandSubsurfaceBridge(NonNull<FjordWpeSubsurfaceBridgeOpaque>);
+
+impl WaylandSubsurfaceBridge {
+    /// # Safety
+    /// `display` and `parent_surface` must remain live Wayland client pointers
+    /// for the lifetime of the returned bridge. Call [`Self::pump`] on that
+    /// same thread until the bridge is dropped.
+    pub unsafe fn new(display: *mut c_void, parent_surface: *mut c_void) -> Result<Self, String> {
+        let mut error_message = std::ptr::null_mut();
+        let bridge =
+            unsafe { fjord_wpe_subsurface_bridge_new(display, parent_surface, &mut error_message) };
+
+        NonNull::new(bridge)
+            .map(Self)
+            .ok_or_else(|| take_error(error_message))
+    }
+
+    /// Dispatch queued WPE and private-Wayland events without reading or waiting
+    /// on the Wayland connection.
+    pub fn pump(&mut self) -> Result<(), String> {
+        let mut error_message = std::ptr::null_mut();
+        let result =
+            unsafe { fjord_wpe_subsurface_bridge_pump(self.0.as_ptr(), &mut error_message) };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(take_error(error_message))
+        }
+    }
+}
+
+impl Drop for WaylandSubsurfaceBridge {
+    fn drop(&mut self) {
+        unsafe { fjord_wpe_subsurface_bridge_free(self.0.as_ptr()) };
+    }
+}
+
+fn take_error(error_message: *mut c_char) -> String {
+    if error_message.is_null() {
+        return "WPE Wayland subsurface bridge failed without an error message".into();
+    }
+
+    let message = unsafe { CStr::from_ptr(error_message) }
+        .to_string_lossy()
+        .into_owned();
+    unsafe { fjord_wpe_smoke_free_error(error_message) };
+    message
 }
 
 #[cfg(test)]

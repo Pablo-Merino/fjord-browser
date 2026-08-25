@@ -4,7 +4,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, Raw
 
 struct Fjord {
     handles_logged: bool,
-    subsurface_probe_pending: bool,
+    bridge: Option<fjord_webkit::WaylandSubsurfaceBridge>,
 }
 
 impl Render for Fjord {
@@ -12,11 +12,7 @@ impl Render for Fjord {
         if !self.handles_logged {
             println!("GPUI Wayland handles ready");
             self.handles_logged = true;
-            cx.on_next_frame(window, |view, _window, cx| {
-                view.subsurface_probe_pending = true;
-                cx.notify();
-            });
-        } else if self.subsurface_probe_pending {
+
             let display = window
                 .display_handle()
                 .expect("GPUI window has a display handle");
@@ -25,30 +21,49 @@ impl Render for Fjord {
                 .expect("GPUI window has a surface handle");
 
             let RawDisplayHandle::Wayland(display) = display.as_raw() else {
-                eprintln!("GPUI Wayland subsurface probe unavailable: non-Wayland display");
-                self.subsurface_probe_pending = false;
+                eprintln!("GPUI Wayland subsurface bridge unavailable: non-Wayland display");
                 return div().size_full();
             };
             let RawWindowHandle::Wayland(surface) = surface.as_raw() else {
-                eprintln!("GPUI Wayland subsurface probe unavailable: non-Wayland surface");
-                self.subsurface_probe_pending = false;
+                eprintln!("GPUI Wayland subsurface bridge unavailable: non-Wayland surface");
                 return div().size_full();
             };
 
-            unsafe {
-                fjord_webkit::probe_wayland_subsurface(
+            self.bridge = unsafe {
+                fjord_webkit::WaylandSubsurfaceBridge::new(
                     display.display.as_ptr(),
                     surface.surface.as_ptr(),
                 )
             }
             .map_or_else(
-                |error| eprintln!("GPUI Wayland subsurface probe unavailable: {error}"),
-                |_| println!("GPUI Wayland live WPE subsurface smoke ready"),
+                |error| {
+                    eprintln!("GPUI Wayland subsurface bridge unavailable: {error}");
+                    None
+                },
+                |bridge| {
+                    println!("GPUI Wayland live WPE subsurface bridge ready");
+                    Some(bridge)
+                },
             );
-            self.subsurface_probe_pending = false;
+            if self.bridge.is_some() {
+                cx.on_next_frame(window, Fjord::pump_bridge);
+            }
         }
 
         div().size_full()
+    }
+}
+
+impl Fjord {
+    fn pump_bridge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(bridge) = &mut self.bridge {
+            if let Err(error) = bridge.pump() {
+                eprintln!("GPUI Wayland subsurface bridge failed: {error}");
+                self.bridge = None;
+                return;
+            }
+            cx.on_next_frame(window, Fjord::pump_bridge);
+        }
     }
 }
 
@@ -57,7 +72,7 @@ fn main() {
         cx.open_window(WindowOptions::default(), |_, cx| {
             cx.new(|_| Fjord {
                 handles_logged: false,
-                subsurface_probe_pending: false,
+                bridge: None,
             })
         })
         .expect("open Fjord window");

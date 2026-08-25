@@ -280,3 +280,17 @@ The existing repeated resize coverage continues for 19 of those cycles.
 smoke ready`.
 
 **Next:** Implement basic forwarded pointer, scroll, keyboard, and focus input.
+
+## 2026-08-25: Persistent WPE Subsurface Bridge
+
+**Changed:** Replaced the app smoke path with an opaque, same-thread WPE bridge.
+It creates one GPUI-owned child surface and one WPE headless view, then pumps
+only pending private-queue and GLib events from GPUI animation frames. Live
+dma-buf frames still return to WPE only from `wl_buffer.release`.
+
+**Checks:** `./scripts/dev.sh verify` passed locally.
+
+**Evidence:** Athena GPUI smoke output: `GPUI Wayland live WPE subsurface
+bridge ready`.
+
+**Next:** Implement basic forwarded pointer, scroll, keyboard, and focus input.
