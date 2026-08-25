@@ -1096,8 +1096,7 @@ static void bridge_attach_buffer(BridgeBuffer *frame) {
         wpe_buffer_get_height(wpe_buffer)
     );
     wl_surface_commit(bridge->surface);
-    wl_surface_attach(bridge->surface, NULL, 0, 0);
-    wl_surface_commit(bridge->surface);
+    // Keep the current frame visible until a later frame replaces it.
 }
 
 static void bridge_buffer_created(

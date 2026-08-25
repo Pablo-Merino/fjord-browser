@@ -348,3 +348,14 @@ log for pointer, text, key, wheel, and page-scroll events.
 **Checks:** `./scripts/dev.sh verify` passed.
 
 **Next:** Use the fixture for the interactive Athena input checklist.
+
+## 2026-08-25: Visible WPE Subsurface Frame
+
+**Changed:** The persistent bridge now keeps the active WPE dma-buf attached to
+the child surface until a later frame replaces it. The development fixture is
+therefore visible instead of leaving a transparent GPUI window.
+
+**Checks:** `./scripts/dev.sh verify` passed locally. Athena startup smoke
+passed.
+
+**Next:** Interactively validate the visible input fixture on Athena.
