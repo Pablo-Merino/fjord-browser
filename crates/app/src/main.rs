@@ -31,11 +31,11 @@ impl Render for Fjord {
 
             let RawDisplayHandle::Wayland(display) = display.as_raw() else {
                 eprintln!("GPUI Wayland subsurface bridge unavailable: non-Wayland display");
-                return div().size_full();
+                return div().id("web-content").size_full();
             };
             let RawWindowHandle::Wayland(surface) = surface.as_raw() else {
                 eprintln!("GPUI Wayland subsurface bridge unavailable: non-Wayland surface");
-                return div().size_full();
+                return div().id("web-content").size_full();
             };
 
             self.bridge = unsafe {
@@ -60,6 +60,7 @@ impl Render for Fjord {
         }
 
         div()
+            .id("web-content")
             .size_full()
             .track_focus(&self.focus)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::forward_pointer_down))
@@ -74,9 +75,10 @@ impl Fjord {
     fn forward_pointer_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
+        window.focus(&self.focus, cx);
         self.forward_pointer_button(true, event.position.x.to_f64(), event.position.y.to_f64());
     }
 
@@ -101,7 +103,7 @@ impl Fjord {
         &mut self,
         event: &ScrollWheelEvent,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         let (delta_x, delta_y, precise) = match event.delta {
             ScrollDelta::Pixels(delta) => (delta.x.to_f64(), delta.y.to_f64(), true),
@@ -119,6 +121,7 @@ impl Fjord {
         {
             eprintln!("GPUI Wayland subsurface bridge scroll forwarding failed: {error}");
         }
+        cx.stop_propagation();
     }
 
     fn forward_key_down(
