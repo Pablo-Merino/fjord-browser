@@ -108,7 +108,7 @@ case "$command" in
     wpe-smoke-network) run_wpe bash scripts/wpe-smoke.sh --network ;;
     wpe-stress) run_wpe bash scripts/wpe-stress.sh ;;
     wpe-hardware) run_wpe_hardware bash scripts/wpe-hardware.sh ;;
-    gpui-smoke) run_gui cargo run -p fjord-app --locked ;;
+    gpui-smoke) run_gui bash scripts/gpui-smoke.sh ;;
     run) run "$@" ;;
     *)
         cat <<'EOF'

@@ -1048,6 +1048,17 @@ struct FjordWpeSubsurfaceBridge {
     char *cache_directory;
     char *error_message;
     gboolean pointer_entered;
+    guint rendered_frames;
+    guint queued_frames;
+    guint dropped_frames;
+    guint attached_frames;
+    guint released_frames;
+    guint frame_callbacks;
+    guint pointer_down_events;
+    guint pointer_up_events;
+    guint scroll_events;
+    guint keyboard_down_events;
+    guint keyboard_up_events;
     BridgeBuffer frames[2];
     BridgeBuffer *displayed_frame;
     WPEBuffer *pending_wpe_buffer;
@@ -1062,8 +1073,28 @@ static gboolean bridge_create_buffer(
 static void bridge_attach_pending_buffer(FjordWpeSubsurfaceBridge *bridge);
 
 static void bridge_fail(FjordWpeSubsurfaceBridge *bridge, const char *message) {
-    if (!bridge->error_message)
+    if (!bridge->error_message) {
         bridge->error_message = g_strdup(message);
+        g_printerr("Fjord bridge failure: %s\n", message);
+    }
+}
+
+static void bridge_trace(FjordWpeSubsurfaceBridge *bridge, const char *event) {
+    g_printerr(
+        "Fjord bridge %s rendered=%u queued=%u dropped=%u attached=%u released=%u frame_done=%u pointer=%u/%u scroll=%u key=%u/%u\n",
+        event,
+        bridge->rendered_frames,
+        bridge->queued_frames,
+        bridge->dropped_frames,
+        bridge->attached_frames,
+        bridge->released_frames,
+        bridge->frame_callbacks,
+        bridge->pointer_down_events,
+        bridge->pointer_up_events,
+        bridge->scroll_events,
+        bridge->keyboard_down_events,
+        bridge->keyboard_up_events
+    );
 }
 
 static void bridge_release_buffer(BridgeBuffer *frame) {
@@ -1082,6 +1113,8 @@ static void bridge_buffer_release(void *data, struct wl_buffer *buffer) {
     wl_buffer_destroy(frame->buffer);
     frame->buffer = NULL;
     bridge_release_buffer(frame);
+    frame->bridge->released_frames++;
+    bridge_trace(frame->bridge, "buffer-release");
     bridge_attach_pending_buffer(frame->bridge);
 }
 
@@ -1097,6 +1130,8 @@ static void bridge_frame_done(void *data, struct wl_callback *callback, uint32_t
         return;
     wl_callback_destroy(callback);
     bridge->frame_callback = NULL;
+    bridge->frame_callbacks++;
+    bridge_trace(bridge, "frame-done");
     bridge_attach_pending_buffer(bridge);
 }
 
@@ -1120,6 +1155,7 @@ static void bridge_attach_buffer(BridgeBuffer *frame) {
     wl_callback_add_listener(bridge->frame_callback, &bridge_frame_listener, bridge);
     frame->in_flight = TRUE;
     bridge->displayed_frame = frame;
+    bridge->attached_frames++;
     wl_buffer_add_listener(frame->buffer, &bridge_buffer_listener, frame);
     wl_surface_attach(bridge->surface, frame->buffer, 0, 0);
     wl_surface_damage(
@@ -1221,9 +1257,6 @@ static gboolean bridge_create_buffer(
         wpe_buffer_dma_buf_get_format(dma_buf),
         0
     );
-    // libwayland owns these descriptors once the create request is queued.
-    for (guint plane = 0; plane < planes; plane++)
-        frame->plane_fds[plane] = -1;
     return TRUE;
 
 failed:
@@ -1260,12 +1293,17 @@ static void bridge_buffer_rendered(
     FjordWpeSubsurfaceBridge *bridge
 ) {
     (void)view;
+    bridge->rendered_frames++;
     if (bridge->error_message) {
         wpe_view_buffer_released(bridge->view, buffer);
     } else {
-        if (bridge->pending_wpe_buffer)
+        if (bridge->pending_wpe_buffer) {
             wpe_view_buffer_released(bridge->view, bridge->pending_wpe_buffer);
+            bridge->dropped_frames++;
+        }
         bridge->pending_wpe_buffer = buffer;
+        bridge->queued_frames++;
+        bridge_trace(bridge, "buffer-rendered");
         bridge_attach_pending_buffer(bridge);
     }
 }
@@ -1345,7 +1383,7 @@ static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
         "<main><h1>Fjord Input Fixture</h1><p>Click, type, use named keys, and scroll this page.</p>"
         "<button id=click>Click target</button><br><input id=text placeholder='Type here' autofocus>"
         "<h2>Event log</h2><div id=log>ready</div></main>"
-        "<script>const log=document.querySelector('#log');let n=0;const show=x=>{log.textContent=`${++n}: ${x}\n`+log.textContent;document.title=`Fjord Input Fixture: ${x}`};"
+        "<script>const log=document.querySelector('#log');let n=0;const entries=[];const show=x=>{entries.unshift(`${++n}: ${x}`);entries.length=20;log.textContent=entries.join('\n')};"
         "document.querySelector('#click').onclick=()=>show('click');document.querySelector('#text').oninput=e=>show(`text ${e.target.value}`);"
         "document.addEventListener('keydown',e=>show(`key ${e.key}`));document.addEventListener('wheel',e=>show(`scroll ${Math.round(e.deltaY)}`));"
         "window.addEventListener('scroll',()=>show(`page ${Math.round(scrollY)}`));</script>",
@@ -1419,8 +1457,18 @@ int fjord_wpe_subsurface_bridge_pump(FjordWpeSubsurfaceBridge *bridge, char **er
         bridge_fail(bridge, "Wayland connection failed while pumping WPE bridge");
     if (!bridge->error_message)
         bridge_start(bridge);
-    if (!bridge->error_message && wl_display_flush(bridge->wayland_display) < 0 && errno != EAGAIN)
-        bridge_fail(bridge, "failed to flush WPE bridge Wayland requests");
+    if (!bridge->error_message) {
+        int flush_result = wl_display_flush(bridge->wayland_display);
+
+        if (flush_result < 0 && errno != EAGAIN)
+            bridge_fail(bridge, "failed to flush WPE bridge Wayland requests");
+        else if (flush_result >= 0) {
+            for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
+                for (guint plane = 0; plane < G_N_ELEMENTS(bridge->frames[index].plane_fds); plane++)
+                    bridge->frames[index].plane_fds[plane] = -1;
+            }
+        }
+    }
     if (!bridge->error_message)
         return 0;
 
@@ -1473,6 +1521,10 @@ int fjord_wpe_subsurface_bridge_pointer_button(
     }
     if (pressed)
         wpe_view_focus_in(bridge->view);
+    if (pressed)
+        bridge->pointer_down_events++;
+    else
+        bridge->pointer_up_events++;
 
     event = wpe_event_pointer_button_new(
         pressed ? WPE_EVENT_POINTER_DOWN : WPE_EVENT_POINTER_UP,
@@ -1491,6 +1543,7 @@ int fjord_wpe_subsurface_bridge_pointer_button(
     }
     wpe_view_event(bridge->view, event);
     wpe_event_unref(event);
+    bridge_trace(bridge, pressed ? "pointer-down" : "pointer-up");
     return 0;
 }
 
@@ -1556,6 +1609,8 @@ int fjord_wpe_subsurface_bridge_scroll(
     }
     wpe_view_event(bridge->view, event);
     wpe_event_unref(event);
+    bridge->scroll_events++;
+    bridge_trace(bridge, "scroll");
     return 0;
 }
 
@@ -1595,6 +1650,11 @@ int fjord_wpe_subsurface_bridge_keyboard(
     }
     wpe_view_event(bridge->view, event);
     wpe_event_unref(event);
+    if (pressed)
+        bridge->keyboard_down_events++;
+    else
+        bridge->keyboard_up_events++;
+    bridge_trace(bridge, pressed ? "key-down" : "key-up");
     return 0;
 }
 

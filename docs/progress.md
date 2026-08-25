@@ -360,6 +360,15 @@ passed.
 
 **Next:** Interactively validate the visible input fixture on Athena.
 
+## 2026-08-25: GPUI Bridge Trace
+
+**Changed:** `dev.sh gpui-smoke` now saves a Gate 2 report under
+`artifacts/reports/runs/gate2/`. The bridge logs frame ownership and forwarded
+input counters to isolate stalls without relying on visual guesswork.
+
+**Next:** Reproduce the interaction stall on Athena and inspect the saved
+bridge trace.
+
 ## 2026-08-25: WPE Subsurface Frame Pacing
 
 **Changed:** The persistent WPE dma-buf subsurface bridge now waits for the
