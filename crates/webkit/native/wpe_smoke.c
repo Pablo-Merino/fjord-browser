@@ -1023,6 +1023,7 @@ typedef struct {
     struct zwp_linux_buffer_params_v1 *params;
     struct wl_buffer *buffer;
     WPEBuffer *wpe_buffer;
+    WPEBuffer *pending_wpe_buffer;
     int plane_fds[4];
     gboolean in_flight;
 } BridgeBuffer;
@@ -1050,6 +1051,8 @@ struct FjordWpeSubsurfaceBridge {
     BridgeBuffer frame;
 };
 
+static gboolean bridge_create_buffer(FjordWpeSubsurfaceBridge *bridge, WPEBuffer *wpe_buffer);
+
 static void bridge_fail(FjordWpeSubsurfaceBridge *bridge, const char *message) {
     if (!bridge->error_message)
         bridge->error_message = g_strdup(message);
@@ -1062,6 +1065,13 @@ static void bridge_release_buffer(BridgeBuffer *frame) {
     frame->wpe_buffer = NULL;
 }
 
+static void bridge_detach_buffer(BridgeBuffer *frame) {
+    FjordWpeSubsurfaceBridge *bridge = frame->bridge;
+
+    wl_surface_attach(bridge->surface, NULL, 0, 0);
+    wl_surface_commit(bridge->surface);
+}
+
 static void bridge_buffer_release(void *data, struct wl_buffer *buffer) {
     BridgeBuffer *frame = data;
 
@@ -1071,6 +1081,12 @@ static void bridge_buffer_release(void *data, struct wl_buffer *buffer) {
     wl_buffer_destroy(frame->buffer);
     frame->buffer = NULL;
     bridge_release_buffer(frame);
+    if (frame->pending_wpe_buffer) {
+        WPEBuffer *pending = frame->pending_wpe_buffer;
+
+        frame->pending_wpe_buffer = NULL;
+        bridge_create_buffer(frame->bridge, pending);
+    }
 }
 
 static const struct wl_buffer_listener bridge_buffer_listener = {
@@ -1203,11 +1219,20 @@ static void bridge_buffer_rendered(
     WPEBuffer *buffer,
     FjordWpeSubsurfaceBridge *bridge
 ) {
+    BridgeBuffer *frame = &bridge->frame;
+
     (void)view;
-    if (bridge->error_message || bridge->frame.wpe_buffer)
+    if (bridge->error_message) {
         wpe_view_buffer_released(bridge->view, buffer);
-    else
+    } else if (!frame->wpe_buffer) {
         bridge_create_buffer(bridge, buffer);
+    } else if (frame->pending_wpe_buffer) {
+        wpe_view_buffer_released(bridge->view, frame->pending_wpe_buffer);
+        frame->pending_wpe_buffer = buffer;
+    } else {
+        frame->pending_wpe_buffer = buffer;
+        bridge_detach_buffer(frame);
+    }
 }
 
 static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
@@ -1501,6 +1526,8 @@ void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge) {
         zwp_linux_buffer_params_v1_destroy(bridge->frame.params);
     if (bridge->frame.buffer)
         wl_buffer_destroy(bridge->frame.buffer);
+    if (bridge->frame.pending_wpe_buffer)
+        wpe_view_buffer_released(bridge->view, bridge->frame.pending_wpe_buffer);
     for (guint plane = 0; plane < G_N_ELEMENTS(bridge->frame.plane_fds); plane++) {
         if (bridge->frame.plane_fds[plane] >= 0)
             close(bridge->frame.plane_fds[plane]);
