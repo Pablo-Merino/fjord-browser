@@ -338,3 +338,13 @@ Athena startup smoke passed; interactive keyboard confirmation remains pending.
 
 **Next:** Interactively confirm text entry, named keys, focus after click, and
 GPUI shortcut preservation on Athena.
+
+## 2026-08-25: Input Development Fixture
+
+**Changed:** Replaced the bridge's minimal animated page with a development-only
+input fixture. It shows a click target, text field, scrollable page, and visible
+log for pointer, text, key, wheel, and page-scroll events.
+
+**Checks:** `./scripts/dev.sh verify` passed.
+
+**Next:** Use the fixture for the interactive Athena input checklist.

@@ -1278,8 +1278,18 @@ static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
     g_signal_connect(bridge->view, "buffer-rendered", G_CALLBACK(bridge_buffer_rendered), bridge);
     webkit_web_view_load_html(
         bridge->web_view,
-        "<!doctype html><title>Fjord Gate 2</title><body>fjord</body>"
-        "<script>let n=0;setInterval(()=>document.body.style.background=n++%2?'#1d4ed8':'#38bdf8',100)</script>",
+        "<!doctype html><title>Fjord Input Fixture</title>"
+        "<style>body{margin:0;font:16px sans-serif;min-height:2400px;background:#0f172a;color:#e2e8f0}"
+        "main{max-width:680px;margin:48px auto;padding:24px;border:1px solid #334155;border-radius:12px;background:#111827}"
+        "button,input{font:inherit;padding:10px;margin:8px 0}button{background:#38bdf8;color:#082f49;border:0;border-radius:6px}"
+        "#log{white-space:pre-wrap;min-height:120px;padding:12px;background:#020617;border-radius:6px}</style>"
+        "<main><h1>Fjord Input Fixture</h1><p>Click, type, use named keys, and scroll this page.</p>"
+        "<button id=click>Click target</button><br><input id=text placeholder='Type here' autofocus>"
+        "<h2>Event log</h2><div id=log>ready</div></main>"
+        "<script>const log=document.querySelector('#log');let n=0;const show=x=>{log.textContent=`${++n}: ${x}\n`+log.textContent;document.title=`Fjord Input Fixture: ${x}`};"
+        "document.querySelector('#click').onclick=()=>show('click');document.querySelector('#text').oninput=e=>show(`text ${e.target.value}`);"
+        "document.addEventListener('keydown',e=>show(`key ${e.key}`));document.addEventListener('wheel',e=>show(`scroll ${Math.round(e.deltaY)}`));"
+        "window.addEventListener('scroll',()=>show(`page ${Math.round(scrollY)}`));</script>",
         "fjord-gate2://bridge/"
     );
     g_main_context_pop_thread_default(bridge->context);
