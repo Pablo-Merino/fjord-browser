@@ -369,6 +369,19 @@ input counters to isolate stalls without relying on visual guesswork.
 **Next:** Reproduce the interaction stall on Athena and inspect the saved
 bridge trace.
 
+## 2026-08-25: Headless Buffer Ownership Blocker
+
+**Discovery:** The WPE headless view releases its prior buffer internally on
+every new frame before the child compositor surface can safely release it.
+This makes the current live headless bridge inherently prone to flashing or
+stalling; input counters confirm forwarding continues while presentation stops.
+
+**Decision:** Do not tune this bridge further. Replace the headless view with a
+custom Fjord WPE platform view that holds each dma-buf until
+`wl_buffer.release`.
+
+**Next:** Timebox a custom WPE platform subclass spike in `crates/webkit`.
+
 ## 2026-08-25: WPE Subsurface Frame Pacing
 
 **Changed:** The persistent WPE dma-buf subsurface bridge now waits for the

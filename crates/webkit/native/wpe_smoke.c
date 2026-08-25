@@ -1062,7 +1062,6 @@ struct FjordWpeSubsurfaceBridge {
     BridgeBuffer frames[2];
     BridgeBuffer *displayed_frame;
     WPEBuffer *pending_wpe_buffer;
-    struct wl_callback *frame_callback;
 };
 
 static gboolean bridge_create_buffer(
@@ -1071,6 +1070,7 @@ static gboolean bridge_create_buffer(
     WPEBuffer *wpe_buffer
 );
 static void bridge_attach_pending_buffer(FjordWpeSubsurfaceBridge *bridge);
+static void bridge_trace(FjordWpeSubsurfaceBridge *bridge, const char *event);
 
 static void bridge_fail(FjordWpeSubsurfaceBridge *bridge, const char *message) {
     if (!bridge->error_message) {
@@ -1112,6 +1112,8 @@ static void bridge_buffer_release(void *data, struct wl_buffer *buffer) {
     frame->in_flight = FALSE;
     wl_buffer_destroy(frame->buffer);
     frame->buffer = NULL;
+    if (frame->bridge->displayed_frame == frame)
+        frame->bridge->displayed_frame = NULL;
     bridge_release_buffer(frame);
     frame->bridge->released_frames++;
     bridge_trace(frame->bridge, "buffer-release");
@@ -1122,23 +1124,6 @@ static const struct wl_buffer_listener bridge_buffer_listener = {
     .release = bridge_buffer_release,
 };
 
-static void bridge_frame_done(void *data, struct wl_callback *callback, uint32_t time) {
-    FjordWpeSubsurfaceBridge *bridge = data;
-
-    (void)time;
-    if (!bridge || bridge->frame_callback != callback)
-        return;
-    wl_callback_destroy(callback);
-    bridge->frame_callback = NULL;
-    bridge->frame_callbacks++;
-    bridge_trace(bridge, "frame-done");
-    bridge_attach_pending_buffer(bridge);
-}
-
-static const struct wl_callback_listener bridge_frame_listener = {
-    .done = bridge_frame_done,
-};
-
 static void bridge_attach_buffer(BridgeBuffer *frame) {
     FjordWpeSubsurfaceBridge *bridge = frame->bridge;
     WPEBuffer *wpe_buffer = frame->wpe_buffer;
@@ -1147,12 +1132,6 @@ static void bridge_attach_buffer(BridgeBuffer *frame) {
         bridge_fail(bridge, "Wayland compositor created an invalid WPE dma-buf");
         return;
     }
-    bridge->frame_callback = wl_surface_frame(bridge->surface);
-    if (!bridge->frame_callback) {
-        bridge_fail(bridge, "failed to request WPE bridge frame callback");
-        return;
-    }
-    wl_callback_add_listener(bridge->frame_callback, &bridge_frame_listener, bridge);
     frame->in_flight = TRUE;
     bridge->displayed_frame = frame;
     bridge->attached_frames++;
@@ -1272,7 +1251,8 @@ static void bridge_attach_pending_buffer(FjordWpeSubsurfaceBridge *bridge) {
     BridgeBuffer *frame = NULL;
     WPEBuffer *wpe_buffer;
 
-    if (bridge->frame_callback || !bridge->pending_wpe_buffer)
+    if (!bridge->pending_wpe_buffer ||
+        (bridge->displayed_frame && bridge->displayed_frame->in_flight))
         return;
     for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
         if (!bridge->frames[index].wpe_buffer && !bridge->frames[index].params && !bridge->frames[index].buffer) {
@@ -1663,8 +1643,6 @@ void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge) {
         return;
     if (bridge->view)
         g_signal_handlers_disconnect_by_data(bridge->view, bridge);
-    if (bridge->frame_callback)
-        wl_callback_destroy(bridge->frame_callback);
     if (bridge->pending_wpe_buffer)
         wpe_view_buffer_released(bridge->view, bridge->pending_wpe_buffer);
     for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
