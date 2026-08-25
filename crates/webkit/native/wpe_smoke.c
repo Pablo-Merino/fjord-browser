@@ -72,7 +72,9 @@ typedef struct {
     WPEBuffer *wpe_buffer;
     GMainLoop *loop;
     char **error_message;
-    gboolean released;
+    guint released_frames;
+    guint target_frames;
+    gboolean in_flight;
 } LiveBuffer;
 
 static void live_buffer_release(void *data, struct wl_buffer *buffer) {
@@ -81,11 +83,17 @@ static void live_buffer_release(void *data, struct wl_buffer *buffer) {
     (void)buffer;
     if (!live)
         return;
-    if (live->released)
+    if (!live->in_flight)
         return;
-    live->released = TRUE;
+    live->in_flight = FALSE;
+    live->released_frames++;
     wpe_view_buffer_released(live->view, live->wpe_buffer);
-    g_main_loop_quit(live->loop);
+    if (live->buffer == buffer) {
+        wl_buffer_destroy(live->buffer);
+        live->buffer = NULL;
+    }
+    if (live->released_frames >= live->target_frames)
+        g_main_loop_quit(live->loop);
 }
 
 static const struct wl_buffer_listener live_buffer_listener = {
@@ -778,6 +786,7 @@ static gboolean attach_live_buffer(LiveBuffer *live, WPEBuffer *wpe_buffer) {
 
     live->buffer = creation.buffer;
     live->wpe_buffer = wpe_buffer;
+    live->in_flight = TRUE;
     wl_buffer_add_listener(live->buffer, &live_buffer_listener, live);
     wl_surface_attach(live->surface, live->buffer, 0, 0);
     wl_surface_damage(live->surface, 0, 0, wpe_buffer_get_width(wpe_buffer), wpe_buffer_get_height(wpe_buffer));
@@ -792,13 +801,13 @@ static gboolean attach_live_buffer(LiveBuffer *live, WPEBuffer *wpe_buffer) {
         live_buffer_fail(live, "failed to detach the WPE dma-buf");
         goto out;
     }
-    for (guint attempt = 0; attempt < 2 && !live->released; attempt++) {
+    for (guint attempt = 0; attempt < 2 && live->in_flight; attempt++) {
         if (wl_display_roundtrip_queue(live->display, live->queue) < 0) {
             live_buffer_fail(live, "failed to dispatch the WPE dma-buf release");
             goto out;
         }
     }
-    if (!live->released)
+    if (live->in_flight)
         live_buffer_fail(live, "Wayland compositor did not release the WPE dma-buf");
 
 out:
@@ -848,7 +857,9 @@ static gboolean run_live_subsurface_view(
     struct wl_surface *surface,
     char **error_message
 ) {
-    static const char fixture[] = "<!doctype html><title>Fjord Gate 2</title><body>fjord</body>";
+    static const char fixture[] =
+        "<!doctype html><title>Fjord Gate 2</title><body>fjord</body>"
+        "<script>let n = 0; setInterval(() => document.body.style.background = `rgb(${n++ % 2 * 255},0,0)`, 100);</script>";
     GMainContext *context = NULL;
     GMainLoop *loop = NULL;
     WPEDisplay *display = NULL;
@@ -868,6 +879,7 @@ static gboolean run_live_subsurface_view(
         .dmabuf = probe->dmabuf,
         .surface = surface,
         .error_message = error_message,
+        .target_frames = 3,
     };
 
     context = g_main_context_new();
@@ -910,6 +922,8 @@ static gboolean run_live_subsurface_view(
     timeout = attach_timeout(context, 15000, G_SOURCE_FUNC(live_buffer_timeout), &live);
     webkit_web_view_load_html(web_view, fixture, "fjord-gate2://fixture/");
     g_main_loop_run(loop);
+    if (!*error_message && live.released_frames != live.target_frames)
+        *error_message = g_strdup("WPE live subsurface did not release every frame");
 
 out:
     if (timeout) {
