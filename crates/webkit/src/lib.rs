@@ -29,6 +29,13 @@ unsafe extern "C" {
         bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
         error_message: *mut *mut c_char,
     ) -> i32;
+    fn fjord_wpe_subsurface_bridge_resize(
+        bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
+        width: u32,
+        height: u32,
+        scale: u32,
+        error_message: *mut *mut c_char,
+    ) -> i32;
     fn fjord_wpe_subsurface_bridge_pointer_button(
         bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
         pressed: bool,
@@ -49,6 +56,7 @@ unsafe extern "C" {
         bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
         pressed: bool,
         keyval: u32,
+        modifiers: u32,
         error_message: *mut *mut c_char,
     ) -> i32;
     fn fjord_wpe_subsurface_bridge_free(bridge: *mut FjordWpeSubsurfaceBridgeOpaque);
@@ -56,6 +64,10 @@ unsafe extern "C" {
 }
 
 pub const BUILD_VERSION: &str = env!("FJORD_WPE_BUILD_VERSION");
+pub const KEYBOARD_MODIFIER_CONTROL: u32 = 1 << 0;
+pub const KEYBOARD_MODIFIER_SHIFT: u32 = 1 << 1;
+pub const KEYBOARD_MODIFIER_ALT: u32 = 1 << 2;
+pub const KEYBOARD_MODIFIER_META: u32 = 1 << 3;
 
 #[must_use]
 pub fn version() -> (u32, u32, u32) {
@@ -125,6 +137,30 @@ impl WaylandSubsurfaceBridge {
         }
     }
 
+    /// Resize the WPE view in logical pixels at an integer Wayland buffer scale.
+    pub fn resize(&mut self, width: u32, height: u32, scale: u32) -> Result<(), String> {
+        if width == 0 || height == 0 || scale == 0 {
+            return Err("WPE bridge size and scale must be non-zero".into());
+        }
+
+        let mut error_message = std::ptr::null_mut();
+        let result = unsafe {
+            fjord_wpe_subsurface_bridge_resize(
+                self.0.as_ptr(),
+                width,
+                height,
+                scale,
+                &mut error_message,
+            )
+        };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(take_error(error_message))
+        }
+    }
+
     /// Inject a left pointer-button press or release at the view coordinates.
     pub fn pointer_button(&mut self, pressed: bool, x: f64, y: f64) -> Result<(), String> {
         if !x.is_finite() || !y.is_finite() {
@@ -183,7 +219,7 @@ impl WaylandSubsurfaceBridge {
     }
 
     /// Inject a keyboard press or release for an XKB keysym.
-    pub fn keyboard(&mut self, pressed: bool, keyval: u32) -> Result<(), String> {
+    pub fn keyboard(&mut self, pressed: bool, keyval: u32, modifiers: u32) -> Result<(), String> {
         if keyval == 0 {
             return Err("WPE bridge keyboard keyval must not be zero".into());
         }
@@ -194,6 +230,7 @@ impl WaylandSubsurfaceBridge {
                 self.0.as_ptr(),
                 pressed,
                 keyval,
+                modifiers,
                 &mut error_message,
             )
         };

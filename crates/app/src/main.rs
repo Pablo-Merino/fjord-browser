@@ -1,10 +1,11 @@
 use gpui::{
-    App, Context, FocusHandle, KeyDownEvent, KeyUpEvent, Keystroke, MouseButton, MouseDownEvent,
-    MouseUpEvent, Render, ScrollDelta, ScrollWheelEvent, Window, WindowOptions, div, prelude::*,
+    App, Context, FocusHandle, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseUpEvent,
+    Render, ScrollDelta, ScrollWheelEvent, Window, WindowOptions, div, prelude::*,
 };
 use gpui_platform::application;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use xkbcommon::xkb::keysyms::{
     KEY_BackSpace, KEY_Down, KEY_Escape, KEY_Left, KEY_Return, KEY_Right, KEY_Tab, KEY_Up,
 };
@@ -12,8 +13,9 @@ use xkbcommon::xkb::keysyms::{
 struct Fjord {
     handles_logged: bool,
     bridge: Option<fjord_webkit::WaylandSubsurfaceBridge>,
+    bridge_started: bool,
     focus: FocusHandle,
-    forwarded_keys: HashMap<String, u32>,
+    last_key_down: HashMap<String, Instant>,
 }
 
 impl Render for Fjord {
@@ -67,7 +69,6 @@ impl Render for Fjord {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::forward_pointer_up))
             .on_scroll_wheel(cx.listener(Self::forward_scroll))
             .on_key_down(cx.listener(Self::forward_key_down))
-            .on_key_up(cx.listener(Self::forward_key_up))
     }
 }
 
@@ -132,29 +133,28 @@ impl Fjord {
     ) {
         if forwards_to_page(&event.keystroke)
             && let Some(keyval) = keyval(&event.keystroke)
-            && self.forward_key(true, keyval)
         {
-            self.forwarded_keys
-                .insert(event.keystroke.key.clone(), keyval);
+            let now = Instant::now();
+            if self
+                .last_key_down
+                .get(&event.keystroke.key)
+                .is_some_and(|last| now.duration_since(*last) < Duration::from_millis(40))
+            {
+                return;
+            }
+            self.last_key_down.insert(event.keystroke.key.clone(), now);
+            let modifiers = keyboard_modifiers(&event.keystroke);
+            if self.forward_key(true, keyval, modifiers) {
+                self.forward_key(false, keyval, modifiers);
+            }
         }
     }
 
-    fn forward_key_up(
-        &mut self,
-        event: &KeyUpEvent,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        if let Some(keyval) = self.forwarded_keys.remove(&event.keystroke.key) {
-            self.forward_key(false, keyval);
-        }
-    }
-
-    fn forward_key(&mut self, pressed: bool, keyval: u32) -> bool {
+    fn forward_key(&mut self, pressed: bool, keyval: u32, modifiers: u32) -> bool {
         let Some(bridge) = &mut self.bridge else {
             return false;
         };
-        if let Err(error) = bridge.keyboard(pressed, keyval) {
+        if let Err(error) = bridge.keyboard(pressed, keyval, modifiers) {
             eprintln!("GPUI Wayland subsurface bridge keyboard forwarding failed: {error}");
             return false;
         }
@@ -163,11 +163,26 @@ impl Fjord {
 
     fn pump_bridge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(bridge) = &mut self.bridge {
-            if let Err(error) = bridge.pump() {
+            let viewport = window.viewport_size();
+            let width = viewport.width.to_f64().round().max(1.0) as u32;
+            let height = viewport.height.to_f64().round().max(1.0) as u32;
+            // ponytail: Wayland buffer scale is integer; add viewporter support if fractional scaling is required.
+            let scale = window.scale_factor().round().max(1.0) as u32;
+            let result = if self.bridge_started {
+                bridge
+                    .pump()
+                    .and_then(|()| bridge.resize(width, height, scale))
+            } else {
+                bridge
+                    .resize(width, height, scale)
+                    .and_then(|()| bridge.pump())
+            };
+            if let Err(error) = result {
                 eprintln!("GPUI Wayland subsurface bridge failed: {error}");
                 self.bridge = None;
                 return;
             }
+            self.bridge_started = true;
             cx.on_next_frame(window, Fjord::pump_bridge);
         }
     }
@@ -180,8 +195,9 @@ fn main() {
             cx.new(move |_| Fjord {
                 handles_logged: false,
                 bridge: None,
+                bridge_started: false,
                 focus,
-                forwarded_keys: HashMap::new(),
+                last_key_down: HashMap::new(),
             })
         })
         .expect("open Fjord window");
@@ -190,7 +206,25 @@ fn main() {
 }
 
 fn forwards_to_page(keystroke: &Keystroke) -> bool {
-    !keystroke.modifiers.control && !keystroke.modifiers.alt && !keystroke.modifiers.platform
+    (!keystroke.modifiers.control && !keystroke.modifiers.alt && !keystroke.modifiers.platform)
+        || (keystroke.key == "backspace" && !keystroke.modifiers.platform)
+}
+
+fn keyboard_modifiers(keystroke: &Keystroke) -> u32 {
+    let mut modifiers = 0;
+    if keystroke.modifiers.control {
+        modifiers |= fjord_webkit::KEYBOARD_MODIFIER_CONTROL;
+    }
+    if keystroke.modifiers.shift {
+        modifiers |= fjord_webkit::KEYBOARD_MODIFIER_SHIFT;
+    }
+    if keystroke.modifiers.alt {
+        modifiers |= fjord_webkit::KEYBOARD_MODIFIER_ALT;
+    }
+    if keystroke.modifiers.platform {
+        modifiers |= fjord_webkit::KEYBOARD_MODIFIER_META;
+    }
+    modifiers
 }
 
 fn keyval(keystroke: &Keystroke) -> Option<u32> {
@@ -218,7 +252,7 @@ fn keyval(keystroke: &Keystroke) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Keystroke, keyval};
+    use super::{Keystroke, forwards_to_page, keyboard_modifiers, keyval};
 
     #[test]
     fn maps_printable_and_editing_keys() {
@@ -227,5 +261,9 @@ mod tests {
         assert_eq!(keyval(&printable), Some(u32::from(b'a')));
         assert_eq!(keyval(&Keystroke::parse("enter").unwrap()), Some(0xff0d));
         assert_eq!(keyval(&Keystroke::parse("left").unwrap()), Some(0xff51));
+        let control_backspace = Keystroke::parse("ctrl-backspace").unwrap();
+        assert!(forwards_to_page(&control_backspace));
+        assert_eq!(keyboard_modifiers(&control_backspace), 1);
+        assert!(!forwards_to_page(&Keystroke::parse("ctrl-l").unwrap()));
     }
 }

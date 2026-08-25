@@ -1,4 +1,5 @@
 #include "wpe_smoke.h"
+#include "fjord_wpe_platform.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -55,6 +56,7 @@ typedef struct {
     struct wl_compositor *compositor;
     struct wl_subcompositor *subcompositor;
     struct zwp_linux_dmabuf_v1 *dmabuf;
+    uint32_t compositor_version;
     uint32_t dmabuf_version;
     gboolean supports_linear_xrgb;
 } SubsurfaceProbe;
@@ -188,8 +190,15 @@ static void subsurface_probe_global(
 ) {
     SubsurfaceProbe *probe = data;
 
-    if (!g_strcmp0(interface, "wl_compositor"))
-        probe->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, MIN(version, 4));
+    if (!g_strcmp0(interface, "wl_compositor")) {
+        probe->compositor_version = MIN(version, 4);
+        probe->compositor = wl_registry_bind(
+            registry,
+            name,
+            &wl_compositor_interface,
+            probe->compositor_version
+        );
+    }
     else if (!g_strcmp0(interface, "wl_subcompositor"))
         probe->subcompositor = wl_registry_bind(registry, name, &wl_subcompositor_interface, 1);
     else if (!g_strcmp0(interface, "zwp_linux_dmabuf_v1")) {
@@ -1016,17 +1025,6 @@ out:
     return !*error_message;
 }
 
-typedef struct FjordWpeSubsurfaceBridge FjordWpeSubsurfaceBridge;
-
-typedef struct {
-    FjordWpeSubsurfaceBridge *bridge;
-    struct zwp_linux_buffer_params_v1 *params;
-    struct wl_buffer *buffer;
-    WPEBuffer *wpe_buffer;
-    int plane_fds[4];
-    gboolean in_flight;
-} BridgeBuffer;
-
 struct FjordWpeSubsurfaceBridge {
     struct wl_display *wayland_display;
     struct wl_surface *parent_surface;
@@ -1048,9 +1046,14 @@ struct FjordWpeSubsurfaceBridge {
     char *cache_directory;
     char *error_message;
     gboolean pointer_entered;
+    guint width;
+    guint height;
+    guint scale;
+    guint applied_width;
+    guint applied_height;
+    guint applied_scale;
+    gint64 last_resize_time;
     guint rendered_frames;
-    guint queued_frames;
-    guint dropped_frames;
     guint attached_frames;
     guint released_frames;
     guint frame_callbacks;
@@ -1059,17 +1062,8 @@ struct FjordWpeSubsurfaceBridge {
     guint scroll_events;
     guint keyboard_down_events;
     guint keyboard_up_events;
-    BridgeBuffer frames[2];
-    BridgeBuffer *displayed_frame;
-    WPEBuffer *pending_wpe_buffer;
 };
 
-static gboolean bridge_create_buffer(
-    FjordWpeSubsurfaceBridge *bridge,
-    BridgeBuffer *frame,
-    WPEBuffer *wpe_buffer
-);
-static void bridge_attach_pending_buffer(FjordWpeSubsurfaceBridge *bridge);
 static void bridge_trace(FjordWpeSubsurfaceBridge *bridge, const char *event);
 
 static void bridge_fail(FjordWpeSubsurfaceBridge *bridge, const char *message) {
@@ -1081,11 +1075,12 @@ static void bridge_fail(FjordWpeSubsurfaceBridge *bridge, const char *message) {
 
 static void bridge_trace(FjordWpeSubsurfaceBridge *bridge, const char *event) {
     g_printerr(
-        "Fjord bridge %s rendered=%u queued=%u dropped=%u attached=%u released=%u frame_done=%u pointer=%u/%u scroll=%u key=%u/%u\n",
+        "Fjord bridge %s size=%ux%u@%u rendered=%u attached=%u released=%u frame_done=%u pointer=%u/%u scroll=%u key=%u/%u\n",
         event,
+        bridge->width,
+        bridge->height,
+        bridge->scale,
         bridge->rendered_frames,
-        bridge->queued_frames,
-        bridge->dropped_frames,
         bridge->attached_frames,
         bridge->released_frames,
         bridge->frame_callbacks,
@@ -1097,195 +1092,53 @@ static void bridge_trace(FjordWpeSubsurfaceBridge *bridge, const char *event) {
     );
 }
 
-static void bridge_release_buffer(BridgeBuffer *frame) {
-    if (!frame->wpe_buffer)
-        return;
-    wpe_view_buffer_released(frame->bridge->view, frame->wpe_buffer);
-    frame->wpe_buffer = NULL;
+static void bridge_trace_input(FjordWpeSubsurfaceBridge *bridge) {
+    guint events = bridge->pointer_down_events + bridge->pointer_up_events +
+        bridge->scroll_events + bridge->keyboard_down_events + bridge->keyboard_up_events;
+
+    if (events == 1 || !(events % 60))
+        bridge_trace(bridge, "input-progress");
 }
 
-static void bridge_buffer_release(void *data, struct wl_buffer *buffer) {
-    BridgeBuffer *frame = data;
+static void bridge_frame_event(gpointer data, FjordWpeFrameEvent event) {
+    FjordWpeSubsurfaceBridge *bridge = data;
 
-    if (!frame || frame->buffer != buffer || !frame->in_flight)
-        return;
-    frame->in_flight = FALSE;
-    wl_buffer_destroy(frame->buffer);
-    frame->buffer = NULL;
-    if (frame->bridge->displayed_frame == frame)
-        frame->bridge->displayed_frame = NULL;
-    bridge_release_buffer(frame);
-    frame->bridge->released_frames++;
-    bridge_trace(frame->bridge, "buffer-release");
-    bridge_attach_pending_buffer(frame->bridge);
-}
-
-static const struct wl_buffer_listener bridge_buffer_listener = {
-    .release = bridge_buffer_release,
-};
-
-static void bridge_attach_buffer(BridgeBuffer *frame) {
-    FjordWpeSubsurfaceBridge *bridge = frame->bridge;
-    WPEBuffer *wpe_buffer = frame->wpe_buffer;
-
-    if (!frame->buffer || !wpe_buffer) {
-        bridge_fail(bridge, "Wayland compositor created an invalid WPE dma-buf");
-        return;
-    }
-    frame->in_flight = TRUE;
-    bridge->displayed_frame = frame;
-    bridge->attached_frames++;
-    wl_buffer_add_listener(frame->buffer, &bridge_buffer_listener, frame);
-    wl_surface_attach(bridge->surface, frame->buffer, 0, 0);
-    wl_surface_damage(
-        bridge->surface,
-        0,
-        0,
-        wpe_buffer_get_width(wpe_buffer),
-        wpe_buffer_get_height(wpe_buffer)
-    );
-    wl_surface_commit(bridge->surface);
-    // Keep the current frame visible until a later frame replaces it.
-}
-
-static void bridge_buffer_created(
-    void *data,
-    struct zwp_linux_buffer_params_v1 *params,
-    struct wl_buffer *buffer
-) {
-    BridgeBuffer *frame = data;
-
-    (void)params;
-    frame->buffer = buffer;
-    if (frame->params) {
-        zwp_linux_buffer_params_v1_destroy(frame->params);
-        frame->params = NULL;
-    }
-    bridge_attach_buffer(frame);
-}
-
-static void bridge_buffer_creation_failed(void *data, struct zwp_linux_buffer_params_v1 *params) {
-    BridgeBuffer *frame = data;
-
-    (void)params;
-    if (frame->params) {
-        zwp_linux_buffer_params_v1_destroy(frame->params);
-        frame->params = NULL;
-    }
-    bridge_fail(frame->bridge, "Wayland compositor rejected the WPE dma-buf");
-    bridge_release_buffer(frame);
-}
-
-static const struct zwp_linux_buffer_params_v1_listener bridge_buffer_creation_listener = {
-    .created = bridge_buffer_created,
-    .failed = bridge_buffer_creation_failed,
-};
-
-static gboolean bridge_create_buffer(
-    FjordWpeSubsurfaceBridge *bridge,
-    BridgeBuffer *frame,
-    WPEBuffer *wpe_buffer
-) {
-    WPEBufferDMABuf *dma_buf;
-    guint planes;
-
-    if (!WPE_IS_BUFFER_DMA_BUF(wpe_buffer)) {
-        bridge_fail(bridge, "WPE headless view did not render a dma-buf");
-        return FALSE;
-    }
-    dma_buf = WPE_BUFFER_DMA_BUF(wpe_buffer);
-    planes = wpe_buffer_dma_buf_get_n_planes(dma_buf);
-    if (!planes || planes > G_N_ELEMENTS(frame->plane_fds)) {
-        bridge_fail(bridge, "WPE dma-buf has an unsupported plane count");
-        return FALSE;
-    }
-
-    frame->wpe_buffer = wpe_buffer;
-    frame->params = zwp_linux_dmabuf_v1_create_params(bridge->probe.dmabuf);
-    if (!frame->params) {
-        bridge_fail(bridge, "failed to create Wayland dma-buf parameters");
-        goto failed;
-    }
-    for (guint plane = 0; plane < planes; plane++) {
-        int fd = wpe_buffer_dma_buf_get_fd(dma_buf, plane);
-
-        frame->plane_fds[plane] = fd >= 0 ? fcntl(fd, F_DUPFD_CLOEXEC, 3) : -1;
-        if (frame->plane_fds[plane] < 0) {
-            bridge_fail(bridge, "failed to duplicate a WPE dma-buf plane");
-            goto failed;
-        }
-        zwp_linux_buffer_params_v1_add(
-            frame->params,
-            frame->plane_fds[plane],
-            plane,
-            wpe_buffer_dma_buf_get_offset(dma_buf, plane),
-            wpe_buffer_dma_buf_get_stride(dma_buf, plane),
-            wpe_buffer_dma_buf_get_modifier(dma_buf) >> 32,
-            wpe_buffer_dma_buf_get_modifier(dma_buf) & G_MAXUINT32
-        );
-    }
-    zwp_linux_buffer_params_v1_add_listener(
-        frame->params,
-        &bridge_buffer_creation_listener,
-        frame
-    );
-    zwp_linux_buffer_params_v1_create(
-        frame->params,
-        wpe_buffer_get_width(wpe_buffer),
-        wpe_buffer_get_height(wpe_buffer),
-        wpe_buffer_dma_buf_get_format(dma_buf),
-        0
-    );
-    return TRUE;
-
-failed:
-    if (frame->params) {
-        zwp_linux_buffer_params_v1_destroy(frame->params);
-        frame->params = NULL;
-    }
-    bridge_release_buffer(frame);
-    return FALSE;
-}
-
-static void bridge_attach_pending_buffer(FjordWpeSubsurfaceBridge *bridge) {
-    BridgeBuffer *frame = NULL;
-    WPEBuffer *wpe_buffer;
-
-    if (!bridge->pending_wpe_buffer ||
-        (bridge->displayed_frame && bridge->displayed_frame->in_flight))
-        return;
-    for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
-        if (!bridge->frames[index].wpe_buffer && !bridge->frames[index].params && !bridge->frames[index].buffer) {
-            frame = &bridge->frames[index];
+    switch (event) {
+        case FJORD_WPE_FRAME_ATTACHED:
+            bridge->attached_frames++;
             break;
-        }
+        case FJORD_WPE_FRAME_RENDERED:
+            bridge->rendered_frames++;
+            bridge->frame_callbacks++;
+            if (bridge->rendered_frames == 1 || !(bridge->rendered_frames % 60))
+                bridge_trace(bridge, "frame-progress");
+            break;
+        case FJORD_WPE_FRAME_RELEASED:
+            bridge->released_frames++;
+            break;
     }
-    if (!frame)
-        return;
-    wpe_buffer = bridge->pending_wpe_buffer;
-    bridge->pending_wpe_buffer = NULL;
-    bridge_create_buffer(bridge, frame, wpe_buffer);
 }
 
-static void bridge_buffer_rendered(
-    WPEView *view,
-    WPEBuffer *buffer,
-    FjordWpeSubsurfaceBridge *bridge
-) {
-    (void)view;
-    bridge->rendered_frames++;
-    if (bridge->error_message) {
-        wpe_view_buffer_released(bridge->view, buffer);
-    } else {
-        if (bridge->pending_wpe_buffer) {
-            wpe_view_buffer_released(bridge->view, bridge->pending_wpe_buffer);
-            bridge->dropped_frames++;
-        }
-        bridge->pending_wpe_buffer = buffer;
-        bridge->queued_frames++;
-        bridge_trace(bridge, "buffer-rendered");
-        bridge_attach_pending_buffer(bridge);
+static void bridge_apply_resize(FjordWpeSubsurfaceBridge *bridge) {
+    gint64 now;
+
+    if (!bridge->toplevel || !bridge->attached_frames ||
+        (bridge->applied_width == bridge->width && bridge->applied_height == bridge->height &&
+         bridge->applied_scale == bridge->scale))
+        return;
+    now = g_get_monotonic_time();
+    if (bridge->scale == bridge->applied_scale && now - bridge->last_resize_time < 200000)
+        return;
+    wpe_toplevel_scale_changed(bridge->toplevel, bridge->scale);
+    if (!wpe_toplevel_resize(bridge->toplevel, bridge->width, bridge->height)) {
+        bridge_fail(bridge, "failed to resize WPE bridge view");
+        return;
     }
+    bridge->applied_width = bridge->width;
+    bridge->applied_height = bridge->height;
+    bridge->applied_scale = bridge->scale;
+    bridge->last_resize_time = now;
+    bridge_trace(bridge, "resize");
 }
 
 static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
@@ -1297,6 +1150,10 @@ static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
         return TRUE;
     if (bridge->probe.dmabuf_version < 3) {
         bridge_fail(bridge, "Wayland compositor lacks dma-buf modifier support");
+        return FALSE;
+    }
+    if (bridge->probe.compositor_version < 4) {
+        bridge_fail(bridge, "Wayland compositor lacks buffer-space damage support");
         return FALSE;
     }
 
@@ -1327,7 +1184,13 @@ static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
         return FALSE;
     }
     g_main_context_push_thread_default(bridge->context);
-    bridge->wpe_display = wpe_display_headless_new();
+    bridge->wpe_display = fjord_wpe_display_new(
+        bridge->surface,
+        bridge->probe.dmabuf,
+        &bridge->scale,
+        bridge_frame_event,
+        bridge
+    );
     bridge->web_context = webkit_web_context_new();
     bridge->network_session = webkit_network_session_new(
         bridge->data_directory,
@@ -1347,12 +1210,21 @@ static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
     ));
     bridge->view = bridge->web_view ? webkit_web_view_get_wpe_view(bridge->web_view) : NULL;
     bridge->toplevel = bridge->view ? wpe_view_get_toplevel(bridge->view) : NULL;
-    if (!bridge->view || !bridge->toplevel || !wpe_toplevel_resize(bridge->toplevel, 800, 600)) {
+    if (!bridge->view || !bridge->toplevel) {
         bridge_fail(bridge, "failed to configure WPE bridge view");
         g_main_context_pop_thread_default(bridge->context);
         return FALSE;
     }
-    g_signal_connect(bridge->view, "buffer-rendered", G_CALLBACK(bridge_buffer_rendered), bridge);
+    wpe_toplevel_scale_changed(bridge->toplevel, bridge->scale);
+    if (!wpe_toplevel_resize(bridge->toplevel, bridge->width, bridge->height)) {
+        bridge_fail(bridge, "failed to configure WPE bridge view");
+        g_main_context_pop_thread_default(bridge->context);
+        return FALSE;
+    }
+    bridge->applied_width = bridge->width;
+    bridge->applied_height = bridge->height;
+    bridge->applied_scale = bridge->scale;
+    bridge->last_resize_time = g_get_monotonic_time();
     webkit_web_view_load_html(
         bridge->web_view,
         "<!doctype html><title>Fjord Input Fixture</title>"
@@ -1390,11 +1262,9 @@ FjordWpeSubsurfaceBridge *fjord_wpe_subsurface_bridge_new(
     bridge->wayland_display = display_ptr;
     bridge->parent_surface = parent_surface_ptr;
     bridge->context = g_main_context_new();
-    for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
-        bridge->frames[index].bridge = bridge;
-        for (guint plane = 0; plane < G_N_ELEMENTS(bridge->frames[index].plane_fds); plane++)
-            bridge->frames[index].plane_fds[plane] = -1;
-    }
+    bridge->width = 800;
+    bridge->height = 600;
+    bridge->scale = 1;
     bridge->queue = wl_display_create_queue(bridge->wayland_display);
     display_wrapper = bridge->queue ? wl_proxy_create_wrapper(bridge->wayland_display) : NULL;
     if (!bridge->context || !bridge->queue || !display_wrapper) {
@@ -1431,23 +1301,26 @@ int fjord_wpe_subsurface_bridge_pump(FjordWpeSubsurfaceBridge *bridge, char **er
     g_return_val_if_fail(error_message, 1);
     *error_message = NULL;
 
-    while (g_main_context_pending(bridge->context))
-        g_main_context_iteration(bridge->context, FALSE);
+    g_main_context_push_thread_default(bridge->context);
     if (wl_display_dispatch_queue_pending(bridge->wayland_display, bridge->queue) < 0)
         bridge_fail(bridge, "Wayland connection failed while pumping WPE bridge");
+    g_main_context_pop_thread_default(bridge->context);
     if (!bridge->error_message)
         bridge_start(bridge);
+    if (!bridge->error_message)
+        bridge_apply_resize(bridge);
+    guint iteration_limit = bridge->attached_frames ? 64 : 8;
+    g_main_context_push_thread_default(bridge->context);
+    for (guint iteration = 0;
+         iteration < iteration_limit && !bridge->error_message && g_main_context_pending(bridge->context);
+         iteration++)
+        g_main_context_iteration(bridge->context, FALSE);
+    g_main_context_pop_thread_default(bridge->context);
     if (!bridge->error_message) {
         int flush_result = wl_display_flush(bridge->wayland_display);
 
         if (flush_result < 0 && errno != EAGAIN)
             bridge_fail(bridge, "failed to flush WPE bridge Wayland requests");
-        else if (flush_result >= 0) {
-            for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
-                for (guint plane = 0; plane < G_N_ELEMENTS(bridge->frames[index].plane_fds); plane++)
-                    bridge->frames[index].plane_fds[plane] = -1;
-            }
-        }
     }
     if (!bridge->error_message)
         return 0;
@@ -1455,6 +1328,26 @@ int fjord_wpe_subsurface_bridge_pump(FjordWpeSubsurfaceBridge *bridge, char **er
     *error_message = bridge->error_message;
     bridge->error_message = NULL;
     return 1;
+}
+
+int fjord_wpe_subsurface_bridge_resize(
+    FjordWpeSubsurfaceBridge *bridge,
+    uint32_t width,
+    uint32_t height,
+    uint32_t scale,
+    char **error_message
+) {
+    g_return_val_if_fail(bridge, 1);
+    g_return_val_if_fail(error_message, 1);
+    *error_message = NULL;
+    if (!width || !height || !scale) {
+        *error_message = g_strdup("WPE bridge size and scale must be non-zero");
+        return 1;
+    }
+    bridge->width = width;
+    bridge->height = height;
+    bridge->scale = scale;
+    return 0;
 }
 
 int fjord_wpe_subsurface_bridge_pointer_button(
@@ -1523,7 +1416,7 @@ int fjord_wpe_subsurface_bridge_pointer_button(
     }
     wpe_view_event(bridge->view, event);
     wpe_event_unref(event);
-    bridge_trace(bridge, pressed ? "pointer-down" : "pointer-up");
+    bridge_trace_input(bridge);
     return 0;
 }
 
@@ -1590,7 +1483,7 @@ int fjord_wpe_subsurface_bridge_scroll(
     wpe_view_event(bridge->view, event);
     wpe_event_unref(event);
     bridge->scroll_events++;
-    bridge_trace(bridge, "scroll");
+    bridge_trace_input(bridge);
     return 0;
 }
 
@@ -1598,6 +1491,7 @@ int fjord_wpe_subsurface_bridge_keyboard(
     FjordWpeSubsurfaceBridge *bridge,
     bool pressed,
     uint32_t keyval,
+    uint32_t modifiers,
     char **error_message
 ) {
     WPEEvent *event;
@@ -1620,7 +1514,7 @@ int fjord_wpe_subsurface_bridge_keyboard(
         bridge->view,
         WPE_INPUT_SOURCE_KEYBOARD,
         (guint32)(g_get_monotonic_time() / 1000),
-        0,
+        (WPEModifiers)modifiers,
         0,
         keyval
     );
@@ -1634,30 +1528,15 @@ int fjord_wpe_subsurface_bridge_keyboard(
         bridge->keyboard_down_events++;
     else
         bridge->keyboard_up_events++;
-    bridge_trace(bridge, pressed ? "key-down" : "key-up");
+    bridge_trace_input(bridge);
     return 0;
 }
 
 void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge) {
     if (!bridge)
         return;
-    if (bridge->view)
-        g_signal_handlers_disconnect_by_data(bridge->view, bridge);
-    if (bridge->pending_wpe_buffer)
-        wpe_view_buffer_released(bridge->view, bridge->pending_wpe_buffer);
-    for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
-        BridgeBuffer *frame = &bridge->frames[index];
-
-        if (frame->params)
-            zwp_linux_buffer_params_v1_destroy(frame->params);
-        if (frame->buffer)
-            wl_buffer_destroy(frame->buffer);
-        bridge_release_buffer(frame);
-        for (guint plane = 0; plane < G_N_ELEMENTS(frame->plane_fds); plane++) {
-            if (frame->plane_fds[plane] >= 0)
-                close(frame->plane_fds[plane]);
-        }
-    }
+    if (bridge->wpe_display)
+        fjord_wpe_display_shutdown(bridge->wpe_display);
     if (bridge->web_view)
         g_object_unref(bridge->web_view);
     if (bridge->network_session)

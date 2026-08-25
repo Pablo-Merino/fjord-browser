@@ -3,6 +3,8 @@ use std::{collections::BTreeSet, env, path::Path, process::Command};
 fn main() {
     println!("cargo:rerun-if-changed=native/wpe_smoke.c");
     println!("cargo:rerun-if-changed=native/wpe_smoke.h");
+    println!("cargo:rerun-if-changed=native/fjord_wpe_platform.c");
+    println!("cargo:rerun-if-changed=native/fjord_wpe_platform.h");
 
     let webkit = pkg_config::Config::new()
         .cargo_metadata(false)
@@ -60,6 +62,7 @@ fn main() {
 
     let mut native = cc::Build::new();
     native
+        .file("native/fjord_wpe_platform.c")
         .file("native/wpe_smoke.c")
         .file(&generated_source)
         .warnings(true);

@@ -395,3 +395,29 @@ and still returns attached buffers only from `wl_buffer.release`.
 Athena startup smoke passed; interactive smoothness confirmation remains pending.
 
 **Next:** Interactively confirm smooth fixture updates on Athena.
+
+## 2026-08-25: Compositor-Owned WPE Buffers
+
+**Changed:** Replaced the live bridge's headless WPE view with a small Fjord
+platform display and view. The view caches one Wayland buffer per WPE dma-buf,
+reports frames from the child surface callback, and returns buffers only after
+Hyprland releases them. One newest resize frame waits when GPUI's shared
+Wayland queue has not delivered the prior frame callback yet. Resize requests
+are coalesced in the bridge pump so WPE is not flooded during a continuous
+drag. Wayland callbacks run before a bounded WebKit work slice so neither queue
+starves the GPUI thread. The display advertises mouse and keyboard input. GPUI
+viewport changes now resize the WPE view and child surface. Keyboard repeat is
+limited to about 25 Hz. Each accepted key is sent as an immediate down/up pair,
+so repeat remains usable without building a post-release WPE input backlog.
+`Ctrl+Backspace` and `Alt+Backspace` carry their WPE modifier flags for word
+deletion; other Ctrl/Alt/platform shortcuts remain in GPUI.
+
+**Checks:** `./scripts/dev.sh verify` passed locally. The Athena i915/Hyprland
+smoke remained live through grouped-tab resize and continued handling keyboard
+input afterward. The final run reached 305 rendered frames, 306 attached
+frames, and 304 compositor releases without a bridge failure. A long-hold key
+smoke continued rendering with matched key down/up counters after release.
+
+**Evidence:** `artifacts/reports/runs/gate2/gpui-smoke.txt`.
+
+**Next:** Exercise the two-tab swap gate through the custom platform view.

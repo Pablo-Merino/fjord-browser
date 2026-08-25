@@ -68,6 +68,14 @@ FjordWpeSubsurfaceBridge *fjord_wpe_subsurface_bridge_new(
 
 int fjord_wpe_subsurface_bridge_pump(FjordWpeSubsurfaceBridge *bridge, char **error_message);
 
+int fjord_wpe_subsurface_bridge_resize(
+    FjordWpeSubsurfaceBridge *bridge,
+    uint32_t width,
+    uint32_t height,
+    uint32_t scale,
+    char **error_message
+);
+
 int fjord_wpe_subsurface_bridge_pointer_button(
     FjordWpeSubsurfaceBridge *bridge,
     bool pressed,
@@ -90,6 +98,7 @@ int fjord_wpe_subsurface_bridge_keyboard(
     FjordWpeSubsurfaceBridge *bridge,
     bool pressed,
     uint32_t keyval,
+    uint32_t modifiers,
     char **error_message
 );
 
