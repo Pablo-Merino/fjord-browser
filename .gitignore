@@ -5,4 +5,4 @@ skills-lock.json
 target/
 artifacts/screenshots/runs/
 artifacts/reports/runs/
-screenshot*
+/screenshot*

@@ -1,0 +1,17 @@
+Gate 2: three live WPE views
+Date: 2026-08-25
+Hardware: Athena, Intel UHD 620 (i915), Hyprland
+Command: ./scripts/dev.sh gpui-smoke
+
+Result: PASS
+
+Observed active view transitions:
+- Tab 0 -> Tab 1 at rendered=119, attached=119, released=118
+- Tab 1 -> Tab 2 at rendered=127, attached=127, released=126
+- Tab 2 -> Tab 0 at rendered=135, attached=135, released=134
+- Tab 0 -> Tab 1 at rendered=148, attached=149, released=147
+
+No bridge failures occurred. Reviewed captures are in:
+- artifacts/screenshots/baselines/gate2-tab-1.png
+- artifacts/screenshots/baselines/gate2-tab-2.png
+- artifacts/screenshots/baselines/gate2-tab-3.png

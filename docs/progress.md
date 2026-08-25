@@ -418,7 +418,7 @@ input afterward. The final run reached 305 rendered frames, 306 attached
 frames, and 304 compositor releases without a bridge failure. A long-hold key
 smoke continued rendering with matched key down/up counters after release.
 
-**Evidence:** `artifacts/reports/runs/gate2/gpui-smoke.txt`.
+**Evidence:** `artifacts/reports/baselines/gate2-three-live-views.txt`.
 
 **Next:** Exercise the two-tab swap gate through the custom platform view.
 
@@ -432,9 +432,10 @@ state alive between switches. Each fixture has a distinct title and color.
 **Checks:** `./scripts/dev.sh verify` passed locally. Athena automated switching
 visited tabs 0, 1, and 2 repeatedly without a bridge failure. Frame counters
 continued from 119 to 148 rendered frames across the switches. Manual switching
-also passed without stale content or input loss.
+also passed without stale content or input loss. Reviewed isolated captures show
+all three active fixtures at the correct size and color.
 
-**Evidence:** `artifacts/reports/runs/gate2/gpui-smoke.txt`.
+**Evidence:** `artifacts/reports/baselines/gate2-three-live-views.txt` and
+`artifacts/screenshots/baselines/gate2-tab-{1,2,3}.png`.
 
-**Next:** Capture reviewed screenshots for all three active views, then close
-the remaining Gate 2 evidence gap.
+**Next:** Finish Gate 3 pointer movement, clipboard, and fcitx input work.
