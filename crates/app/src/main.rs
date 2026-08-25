@@ -60,6 +60,7 @@ impl Render for Fjord {
                 },
             );
             if self.bridge.is_some() {
+                window.focus(&self.focus, cx);
                 cx.on_next_frame(window, Fjord::pump_bridge);
             }
         }
