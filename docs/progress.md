@@ -359,3 +359,17 @@ therefore visible instead of leaving a transparent GPUI window.
 passed.
 
 **Next:** Interactively validate the visible input fixture on Athena.
+
+## 2026-08-25: WPE Subsurface Frame Pacing
+
+**Changed:** The persistent WPE dma-buf subsurface bridge now waits for the
+child surface's Wayland frame callback before attaching a replacement. It keeps
+one newest queued WPE buffer, returns superseded queued buffers immediately,
+and still returns attached buffers only from `wl_buffer.release`.
+
+**Checks:** `./scripts/dev.sh verify` passed locally.
+
+**Evidence:** Local build, test, and Clippy output from `./scripts/dev.sh verify`.
+Athena startup smoke passed; interactive smoothness confirmation remains pending.
+
+**Next:** Interactively confirm smooth fixture updates on Athena.

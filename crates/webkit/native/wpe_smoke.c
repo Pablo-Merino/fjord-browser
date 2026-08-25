@@ -1023,7 +1023,6 @@ typedef struct {
     struct zwp_linux_buffer_params_v1 *params;
     struct wl_buffer *buffer;
     WPEBuffer *wpe_buffer;
-    WPEBuffer *pending_wpe_buffer;
     int plane_fds[4];
     gboolean in_flight;
 } BridgeBuffer;
@@ -1051,6 +1050,8 @@ struct FjordWpeSubsurfaceBridge {
     gboolean pointer_entered;
     BridgeBuffer frames[2];
     BridgeBuffer *displayed_frame;
+    WPEBuffer *pending_wpe_buffer;
+    struct wl_callback *frame_callback;
 };
 
 static gboolean bridge_create_buffer(
@@ -1058,6 +1059,7 @@ static gboolean bridge_create_buffer(
     BridgeBuffer *frame,
     WPEBuffer *wpe_buffer
 );
+static void bridge_attach_pending_buffer(FjordWpeSubsurfaceBridge *bridge);
 
 static void bridge_fail(FjordWpeSubsurfaceBridge *bridge, const char *message) {
     if (!bridge->error_message)
@@ -1080,10 +1082,26 @@ static void bridge_buffer_release(void *data, struct wl_buffer *buffer) {
     wl_buffer_destroy(frame->buffer);
     frame->buffer = NULL;
     bridge_release_buffer(frame);
+    bridge_attach_pending_buffer(frame->bridge);
 }
 
 static const struct wl_buffer_listener bridge_buffer_listener = {
     .release = bridge_buffer_release,
+};
+
+static void bridge_frame_done(void *data, struct wl_callback *callback, uint32_t time) {
+    FjordWpeSubsurfaceBridge *bridge = data;
+
+    (void)time;
+    if (!bridge || bridge->frame_callback != callback)
+        return;
+    wl_callback_destroy(callback);
+    bridge->frame_callback = NULL;
+    bridge_attach_pending_buffer(bridge);
+}
+
+static const struct wl_callback_listener bridge_frame_listener = {
+    .done = bridge_frame_done,
 };
 
 static void bridge_attach_buffer(BridgeBuffer *frame) {
@@ -1094,6 +1112,12 @@ static void bridge_attach_buffer(BridgeBuffer *frame) {
         bridge_fail(bridge, "Wayland compositor created an invalid WPE dma-buf");
         return;
     }
+    bridge->frame_callback = wl_surface_frame(bridge->surface);
+    if (!bridge->frame_callback) {
+        bridge_fail(bridge, "failed to request WPE bridge frame callback");
+        return;
+    }
+    wl_callback_add_listener(bridge->frame_callback, &bridge_frame_listener, bridge);
     frame->in_flight = TRUE;
     bridge->displayed_frame = frame;
     wl_buffer_add_listener(frame->buffer, &bridge_buffer_listener, frame);
@@ -1211,27 +1235,38 @@ failed:
     return FALSE;
 }
 
+static void bridge_attach_pending_buffer(FjordWpeSubsurfaceBridge *bridge) {
+    BridgeBuffer *frame = NULL;
+    WPEBuffer *wpe_buffer;
+
+    if (bridge->frame_callback || !bridge->pending_wpe_buffer)
+        return;
+    for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
+        if (!bridge->frames[index].wpe_buffer && !bridge->frames[index].params && !bridge->frames[index].buffer) {
+            frame = &bridge->frames[index];
+            break;
+        }
+    }
+    if (!frame)
+        return;
+    wpe_buffer = bridge->pending_wpe_buffer;
+    bridge->pending_wpe_buffer = NULL;
+    bridge_create_buffer(bridge, frame, wpe_buffer);
+}
+
 static void bridge_buffer_rendered(
     WPEView *view,
     WPEBuffer *buffer,
     FjordWpeSubsurfaceBridge *bridge
 ) {
-    BridgeBuffer *frame = NULL;
-
     (void)view;
     if (bridge->error_message) {
         wpe_view_buffer_released(bridge->view, buffer);
     } else {
-        for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
-            if (!bridge->frames[index].wpe_buffer && !bridge->frames[index].params && !bridge->frames[index].buffer) {
-                frame = &bridge->frames[index];
-                break;
-            }
-        }
-        if (frame)
-            bridge_create_buffer(bridge, frame, buffer);
-        else
-            wpe_view_buffer_released(bridge->view, buffer);
+        if (bridge->pending_wpe_buffer)
+            wpe_view_buffer_released(bridge->view, bridge->pending_wpe_buffer);
+        bridge->pending_wpe_buffer = buffer;
+        bridge_attach_pending_buffer(bridge);
     }
 }
 
@@ -1568,6 +1603,10 @@ void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge) {
         return;
     if (bridge->view)
         g_signal_handlers_disconnect_by_data(bridge->view, bridge);
+    if (bridge->frame_callback)
+        wl_callback_destroy(bridge->frame_callback);
+    if (bridge->pending_wpe_buffer)
+        wpe_view_buffer_released(bridge->view, bridge->pending_wpe_buffer);
     for (guint index = 0; index < G_N_ELEMENTS(bridge->frames); index++) {
         BridgeBuffer *frame = &bridge->frames[index];
 
