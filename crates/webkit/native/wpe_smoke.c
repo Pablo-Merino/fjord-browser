@@ -1390,10 +1390,54 @@ int fjord_wpe_subsurface_bridge_pointer_button(
         1,
         x,
         y,
-        wpe_view_compute_press_count(bridge->view, x, y, 1, time)
+        pressed ? wpe_view_compute_press_count(bridge->view, x, y, 1, time) : 0
     );
     if (!event) {
         *error_message = g_strdup("failed to create WPE pointer button event");
+        return 1;
+    }
+    wpe_view_event(bridge->view, event);
+    wpe_event_unref(event);
+    return 0;
+}
+
+int fjord_wpe_subsurface_bridge_scroll(
+    FjordWpeSubsurfaceBridge *bridge,
+    double x,
+    double y,
+    double delta_x,
+    double delta_y,
+    bool precise,
+    char **error_message
+) {
+    WPEEvent *event;
+
+    g_return_val_if_fail(bridge, 1);
+    g_return_val_if_fail(error_message, 1);
+    *error_message = NULL;
+    if (!bridge->view) {
+        *error_message = g_strdup("WPE bridge view is not ready for scroll input");
+        return 1;
+    }
+    if (!isfinite(x) || !isfinite(y) || !isfinite(delta_x) || !isfinite(delta_y)) {
+        *error_message = g_strdup("WPE bridge scroll values must be finite");
+        return 1;
+    }
+
+    event = wpe_event_scroll_new(
+        bridge->view,
+        WPE_INPUT_SOURCE_MOUSE,
+        (guint32)(g_get_monotonic_time() / 1000),
+        0,
+        delta_x,
+        delta_y,
+        precise,
+        FALSE,
+        x,
+        y
+    );
+    if (!event) {
+        *error_message = g_strdup("failed to create WPE scroll event");
         return 1;
     }
     wpe_view_event(bridge->view, event);

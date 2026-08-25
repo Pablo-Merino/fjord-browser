@@ -1,6 +1,6 @@
 use gpui::{
-    App, Context, MouseButton, MouseDownEvent, MouseUpEvent, Render, Window, WindowOptions, div,
-    prelude::*,
+    App, Context, MouseButton, MouseDownEvent, MouseUpEvent, Render, ScrollDelta, ScrollWheelEvent,
+    Window, WindowOptions, div, prelude::*,
 };
 use gpui_platform::application;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
@@ -57,6 +57,7 @@ impl Render for Fjord {
             .size_full()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::forward_pointer_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::forward_pointer_up))
+            .on_scroll_wheel(cx.listener(Self::forward_scroll))
     }
 }
 
@@ -84,6 +85,30 @@ impl Fjord {
             && let Err(error) = bridge.pointer_button(pressed, x, y)
         {
             eprintln!("GPUI Wayland subsurface bridge pointer forwarding failed: {error}");
+        }
+    }
+
+    fn forward_scroll(
+        &mut self,
+        event: &ScrollWheelEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        let (delta_x, delta_y, precise) = match event.delta {
+            ScrollDelta::Pixels(delta) => (delta.x.to_f64(), delta.y.to_f64(), true),
+            ScrollDelta::Lines(delta) => (f64::from(delta.x), f64::from(delta.y), false),
+        };
+
+        if let Some(bridge) = &mut self.bridge
+            && let Err(error) = bridge.scroll(
+                event.position.x.to_f64(),
+                event.position.y.to_f64(),
+                delta_x,
+                delta_y,
+                precise,
+            )
+        {
+            eprintln!("GPUI Wayland subsurface bridge scroll forwarding failed: {error}");
         }
     }
 

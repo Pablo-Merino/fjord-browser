@@ -36,6 +36,15 @@ unsafe extern "C" {
         y: f64,
         error_message: *mut *mut c_char,
     ) -> i32;
+    fn fjord_wpe_subsurface_bridge_scroll(
+        bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        precise: bool,
+        error_message: *mut *mut c_char,
+    ) -> i32;
     fn fjord_wpe_subsurface_bridge_free(bridge: *mut FjordWpeSubsurfaceBridgeOpaque);
     fn fjord_wpe_smoke_free_error(error_message: *mut c_char);
 }
@@ -123,6 +132,39 @@ impl WaylandSubsurfaceBridge {
                 pressed,
                 x,
                 y,
+                &mut error_message,
+            )
+        };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(take_error(error_message))
+        }
+    }
+
+    /// Inject a scroll event at the view coordinates.
+    pub fn scroll(
+        &mut self,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        precise: bool,
+    ) -> Result<(), String> {
+        if !x.is_finite() || !y.is_finite() || !delta_x.is_finite() || !delta_y.is_finite() {
+            return Err("WPE bridge scroll values must be finite".into());
+        }
+
+        let mut error_message = std::ptr::null_mut();
+        let result = unsafe {
+            fjord_wpe_subsurface_bridge_scroll(
+                self.0.as_ptr(),
+                x,
+                y,
+                delta_x,
+                delta_y,
+                precise,
                 &mut error_message,
             )
         };

@@ -308,3 +308,17 @@ Athena startup smoke passed; interactive click confirmation remains pending.
 
 **Next:** Manually confirm page clicks on Athena. Pointer movement, scrolling,
 keyboard input, and focus remain unimplemented.
+
+## 2026-08-25: Basic Scroll Forwarding
+
+**Changed:** The persistent GPUI WPE subsurface bridge now forwards root scroll
+events to WPE. Pixel deltas are precise; line deltas are non-precise. Both
+boundaries reject invalid values and report failures without panics.
+
+**Checks:** `./scripts/dev.sh verify` passed locally.
+
+**Evidence:** Local build, test, and Clippy output from `./scripts/dev.sh verify`.
+Athena startup smoke passed; interactive scroll confirmation remains pending.
+
+**Next:** Manually confirm page clicks and scrolling on Athena. Pointer movement,
+keyboard input, and focus remain unimplemented.
