@@ -265,3 +265,18 @@ Athena's Hyprland session.
 smoke ready`.
 
 **Next:** Exercise two live WPE views with repeated switching.
+
+## 2026-08-25: Alternating Live WPE DMA-BUF Subsurface
+
+**Changed:** The GPUI Wayland smoke now keeps two deterministic WPE headless
+views alive. It alternates the active view across 20 dma-buf release cycles on
+one child surface. Hidden-view buffers return directly to WPE without a
+Wayland attachment. Active buffers still return only after `wl_buffer.release`.
+The existing repeated resize coverage continues for 19 of those cycles.
+
+**Checks:** `./scripts/dev.sh verify` passed locally.
+
+**Evidence:** Athena GPUI smoke output: `GPUI Wayland live WPE subsurface
+smoke ready`.
+
+**Next:** Implement basic forwarded pointer, scroll, keyboard, and focus input.

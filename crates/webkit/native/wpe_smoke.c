@@ -62,6 +62,8 @@ typedef struct {
     gboolean failed;
 } BufferCreation;
 
+typedef struct LiveSmoke LiveSmoke;
+
 typedef struct {
     struct wl_display *display;
     struct wl_event_queue *queue;
@@ -73,17 +75,26 @@ typedef struct {
     WPEToplevel *toplevel;
     GMainLoop *loop;
     char **error_message;
+    LiveSmoke *smoke;
+    guint index;
+    gboolean in_flight;
+} LiveBuffer;
+
+struct LiveSmoke {
+    GMainLoop *loop;
+    char **error_message;
+    guint active_view;
     guint released_frames;
     guint target_frames;
     guint resize_count;
     guint target_resizes;
-    gboolean in_flight;
-} LiveBuffer;
+};
 
 static void live_buffer_fail(LiveBuffer *live, const char *message);
 
 static void live_buffer_release(void *data, struct wl_buffer *buffer) {
     LiveBuffer *live = data;
+    LiveSmoke *smoke;
 
     (void)buffer;
     if (!live)
@@ -91,28 +102,30 @@ static void live_buffer_release(void *data, struct wl_buffer *buffer) {
     if (!live->in_flight)
         return;
     live->in_flight = FALSE;
-    live->released_frames++;
-    wpe_view_buffer_released(live->view, live->wpe_buffer);
     if (live->buffer == buffer) {
         wl_buffer_destroy(live->buffer);
         live->buffer = NULL;
     }
-    if (live->resize_count < live->target_resizes) {
+    smoke = live->smoke;
+    smoke->released_frames++;
+    smoke->active_view = (live->index + 1) % 2;
+    wpe_view_buffer_released(live->view, live->wpe_buffer);
+    if (smoke->resize_count < smoke->target_resizes) {
         static const gint sizes[][2] = {
             { 640, 480 },
             { 1024, 768 },
             { 800, 600 },
             { 720, 540 },
         };
-        const gint *size = sizes[live->resize_count % G_N_ELEMENTS(sizes)];
+        const gint *size = sizes[smoke->resize_count % G_N_ELEMENTS(sizes)];
 
-        live->resize_count++;
+        smoke->resize_count++;
         if (!wpe_toplevel_resize(live->toplevel, size[0], size[1])) {
             live_buffer_fail(live, "failed to resize the live WPE toplevel");
             return;
         }
     }
-    if (live->released_frames >= live->target_frames)
+    if (smoke->released_frames >= smoke->target_frames)
         g_main_loop_quit(live->loop);
 }
 
@@ -841,7 +854,9 @@ out:
 }
 
 static void live_buffer_rendered(WPEView *view, WPEBuffer *buffer, LiveBuffer *live) {
-    if (!live->buffer) {
+    if (live->index != live->smoke->active_view) {
+        wpe_view_buffer_released(view, buffer);
+    } else if (!live->buffer) {
         live->view = view;
         attach_live_buffer(live, buffer);
     }
@@ -877,36 +892,36 @@ static gboolean run_live_subsurface_view(
     struct wl_surface *surface,
     char **error_message
 ) {
-    static const char fixture[] =
-        "<!doctype html><title>Fjord Gate 2</title><body>fjord</body>"
-        "<script>let n = 0; setInterval(() => document.body.style.background = `rgb(${n++ % 2 * 255},0,0)`, 100);</script>";
+    static const char *fixtures[] = {
+        "<!doctype html><title>Fjord Gate 2 Crimson</title><body>crimson</body>"
+        "<script>let n = 0; setInterval(() => document.body.style.background = n++ % 2 ? '#9b1c31' : '#ef4444', 100);</script>",
+        "<!doctype html><title>Fjord Gate 2 Azure</title><body>azure</body>"
+        "<script>let n = 0; setInterval(() => document.body.style.background = n++ % 2 ? '#1d4ed8' : '#38bdf8', 100);</script>",
+    };
     GMainContext *context = NULL;
     GMainLoop *loop = NULL;
     WPEDisplay *display = NULL;
     WebKitWebContext *web_context = NULL;
     WebKitNetworkSession *network_session = NULL;
-    WebKitWebView *web_view = NULL;
-    WPEView *view = NULL;
-    WPEToplevel *toplevel = NULL;
+    WebKitWebView *web_views[2] = { NULL, NULL };
+    WPEView *views[2] = { NULL, NULL };
+    WPEToplevel *toplevels[2] = { NULL, NULL };
     GSource *timeout = NULL;
     GError *directory_error = NULL;
     char *profile = NULL;
     char *data_directory = NULL;
     char *cache_directory = NULL;
-    LiveBuffer live = {
-        .display = wayland_display,
-        .queue = queue,
-        .dmabuf = probe->dmabuf,
-        .surface = surface,
+    LiveSmoke smoke = {
         .error_message = error_message,
-        .target_frames = 11,
-        .target_resizes = 10,
+        .target_frames = 20,
+        .target_resizes = 19,
     };
+    LiveBuffer live[2] = { 0 };
 
     context = g_main_context_new();
     g_main_context_push_thread_default(context);
     loop = g_main_loop_new(context, FALSE);
-    live.loop = loop;
+    smoke.loop = loop;
     profile = g_dir_make_tmp("fjord-gate2-XXXXXX", &directory_error);
     if (!profile) {
         *error_message = g_strdup(directory_error->message);
@@ -926,26 +941,39 @@ static gboolean run_live_subsurface_view(
         *error_message = g_strdup("failed to create WPE headless smoke view");
         goto out;
     }
-    web_view = WEBKIT_WEB_VIEW(g_object_new(
-        WEBKIT_TYPE_WEB_VIEW,
-        "display", display,
-        "web-context", web_context,
-        "network-session", network_session,
-        NULL
-    ));
-    view = web_view ? webkit_web_view_get_wpe_view(web_view) : NULL;
-    toplevel = view ? wpe_view_get_toplevel(view) : NULL;
-    if (!view || !toplevel || !wpe_toplevel_resize(toplevel, 800, 600)) {
-        *error_message = g_strdup("failed to configure WPE headless smoke view");
-        goto out;
+    for (guint index = 0; index < G_N_ELEMENTS(live); index++) {
+        live[index] = (LiveBuffer) {
+            .display = wayland_display,
+            .queue = queue,
+            .dmabuf = probe->dmabuf,
+            .surface = surface,
+            .loop = loop,
+            .error_message = error_message,
+            .smoke = &smoke,
+            .index = index,
+        };
+        web_views[index] = WEBKIT_WEB_VIEW(g_object_new(
+            WEBKIT_TYPE_WEB_VIEW,
+            "display", display,
+            "web-context", web_context,
+            "network-session", network_session,
+            NULL
+        ));
+        views[index] = web_views[index] ? webkit_web_view_get_wpe_view(web_views[index]) : NULL;
+        toplevels[index] = views[index] ? wpe_view_get_toplevel(views[index]) : NULL;
+        if (!views[index] || !toplevels[index] || !wpe_toplevel_resize(toplevels[index], 800, 600)) {
+            *error_message = g_strdup("failed to configure WPE headless smoke view");
+            goto out;
+        }
+        live[index].toplevel = toplevels[index];
+        g_signal_connect(views[index], "buffer-rendered", G_CALLBACK(live_buffer_rendered), &live[index]);
     }
-    live.toplevel = toplevel;
-    g_signal_connect(view, "buffer-rendered", G_CALLBACK(live_buffer_rendered), &live);
-    timeout = attach_timeout(context, 15000, G_SOURCE_FUNC(live_buffer_timeout), &live);
-    webkit_web_view_load_html(web_view, fixture, "fjord-gate2://fixture/");
+    timeout = attach_timeout(context, 15000, G_SOURCE_FUNC(live_buffer_timeout), &live[0]);
+    for (guint index = 0; index < G_N_ELEMENTS(live); index++)
+        webkit_web_view_load_html(web_views[index], fixtures[index], "fjord-gate2://fixture/");
     g_main_loop_run(loop);
     if (!*error_message &&
-        (live.released_frames != live.target_frames || live.resize_count != live.target_resizes))
+        (smoke.released_frames != smoke.target_frames || smoke.resize_count != smoke.target_resizes))
         *error_message = g_strdup("WPE live subsurface did not finish every resize frame");
 
 out:
@@ -953,15 +981,19 @@ out:
         g_source_destroy(timeout);
         g_source_unref(timeout);
     }
-    if (view)
-        g_signal_handlers_disconnect_by_data(view, &live);
-    if (live.buffer) {
-        wl_proxy_set_user_data((struct wl_proxy *)live.buffer, NULL);
-        wl_buffer_destroy(live.buffer);
-        wl_display_flush(wayland_display);
+    for (guint index = 0; index < G_N_ELEMENTS(live); index++) {
+        if (views[index])
+            g_signal_handlers_disconnect_by_data(views[index], &live[index]);
+        if (live[index].buffer) {
+            wl_proxy_set_user_data((struct wl_proxy *)live[index].buffer, NULL);
+            wl_buffer_destroy(live[index].buffer);
+            wl_display_flush(wayland_display);
+        }
     }
-    if (web_view)
-        g_object_unref(web_view);
+    for (guint index = 0; index < G_N_ELEMENTS(web_views); index++) {
+        if (web_views[index])
+            g_object_unref(web_views[index]);
+    }
     if (network_session)
         g_object_unref(network_session);
     if (web_context)
