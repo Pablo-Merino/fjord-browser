@@ -1445,6 +1445,44 @@ int fjord_wpe_subsurface_bridge_scroll(
     return 0;
 }
 
+int fjord_wpe_subsurface_bridge_keyboard(
+    FjordWpeSubsurfaceBridge *bridge,
+    bool pressed,
+    uint32_t keyval,
+    char **error_message
+) {
+    WPEEvent *event;
+
+    g_return_val_if_fail(bridge, 1);
+    g_return_val_if_fail(error_message, 1);
+    *error_message = NULL;
+    if (!bridge->view) {
+        *error_message = g_strdup("WPE bridge view is not ready for keyboard input");
+        return 1;
+    }
+    if (!keyval) {
+        *error_message = g_strdup("WPE bridge keyboard keyval must not be zero");
+        return 1;
+    }
+
+    event = wpe_event_keyboard_new(
+        pressed ? WPE_EVENT_KEYBOARD_KEY_DOWN : WPE_EVENT_KEYBOARD_KEY_UP,
+        bridge->view,
+        WPE_INPUT_SOURCE_KEYBOARD,
+        (guint32)(g_get_monotonic_time() / 1000),
+        0,
+        0,
+        keyval
+    );
+    if (!event) {
+        *error_message = g_strdup("failed to create WPE keyboard event");
+        return 1;
+    }
+    wpe_view_event(bridge->view, event);
+    wpe_event_unref(event);
+    return 0;
+}
+
 void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge) {
     if (!bridge)
         return;

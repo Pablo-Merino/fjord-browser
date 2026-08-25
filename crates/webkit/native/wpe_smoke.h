@@ -86,6 +86,13 @@ int fjord_wpe_subsurface_bridge_scroll(
     char **error_message
 );
 
+int fjord_wpe_subsurface_bridge_keyboard(
+    FjordWpeSubsurfaceBridge *bridge,
+    bool pressed,
+    uint32_t keyval,
+    char **error_message
+);
+
 void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge);
 
 size_t fjord_wpe_smoke_report_size(void);

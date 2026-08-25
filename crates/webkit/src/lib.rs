@@ -45,6 +45,12 @@ unsafe extern "C" {
         precise: bool,
         error_message: *mut *mut c_char,
     ) -> i32;
+    fn fjord_wpe_subsurface_bridge_keyboard(
+        bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
+        pressed: bool,
+        keyval: u32,
+        error_message: *mut *mut c_char,
+    ) -> i32;
     fn fjord_wpe_subsurface_bridge_free(bridge: *mut FjordWpeSubsurfaceBridgeOpaque);
     fn fjord_wpe_smoke_free_error(error_message: *mut c_char);
 }
@@ -165,6 +171,29 @@ impl WaylandSubsurfaceBridge {
                 delta_x,
                 delta_y,
                 precise,
+                &mut error_message,
+            )
+        };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(take_error(error_message))
+        }
+    }
+
+    /// Inject a keyboard press or release for an XKB keysym.
+    pub fn keyboard(&mut self, pressed: bool, keyval: u32) -> Result<(), String> {
+        if keyval == 0 {
+            return Err("WPE bridge keyboard keyval must not be zero".into());
+        }
+
+        let mut error_message = std::ptr::null_mut();
+        let result = unsafe {
+            fjord_wpe_subsurface_bridge_keyboard(
+                self.0.as_ptr(),
+                pressed,
+                keyval,
                 &mut error_message,
             )
         };

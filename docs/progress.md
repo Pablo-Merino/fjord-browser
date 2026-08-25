@@ -322,3 +322,19 @@ Athena startup smoke passed; interactive scroll confirmation remains pending.
 
 **Next:** Manually confirm page clicks and scrolling on Athena. Pointer movement,
 keyboard input, and focus remain unimplemented.
+
+## 2026-08-25: Character-First Keyboard Forwarding
+
+**Changed:** The root GPUI view now takes focus after a pointer press and forwards
+printable ASCII characters plus Enter, Backspace, Tab, Escape, and arrow keys to
+WPE. The bridge creates WPE keyboard down/up events with `keycode=0`. Ctrl, Alt,
+and platform-key combinations stay in GPUI. Named keys use xkbcommon keysyms.
+
+**Checks:** `./scripts/dev.sh verify` passed, including the printable and named
+key mapping unit test.
+
+**Evidence:** Local build, test, and Clippy output from `./scripts/dev.sh verify`.
+Athena startup smoke passed; interactive keyboard confirmation remains pending.
+
+**Next:** Interactively confirm text entry, named keys, focus after click, and
+GPUI shortcut preservation on Athena.
