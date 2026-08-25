@@ -24,5 +24,6 @@ WPEDisplay *fjord_wpe_display_new(
 );
 
 void fjord_wpe_display_shutdown(WPEDisplay *display);
+void fjord_wpe_display_set_active_view(WPEDisplay *display, WPEView *view);
 
 #endif

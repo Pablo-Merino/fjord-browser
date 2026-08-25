@@ -37,6 +37,7 @@ typedef struct _FjordWpeDisplay {
     WPEDisplay parent_instance;
     WPEDisplay *device_display;
     FjordWpePlatformConfig config;
+    WPEView *active_view;
     gboolean shutting_down;
 } FjordWpeDisplay;
 
@@ -97,6 +98,12 @@ static const struct wl_buffer_listener wayland_buffer_listener = {
 };
 
 static gboolean present_buffer(FjordWpeView *view, WPEBuffer *wpe_buffer, GError **error);
+
+static gboolean view_is_active(FjordWpeView *view) {
+    FjordWpeDisplay *display = (FjordWpeDisplay *)wpe_view_get_display(WPE_VIEW(view));
+
+    return display->active_view == WPE_VIEW(view);
+}
 
 static struct wl_buffer *create_wayland_buffer(
     FjordWpeView *view,
@@ -200,7 +207,10 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time) 
     pending_buffer = view->pending_buffer;
     view->pending_buffer = NULL;
     if (pending_buffer) {
-        if (!present_buffer(view, pending_buffer, &error)) {
+        if (!view_is_active(view)) {
+            wpe_view_buffer_rendered(WPE_VIEW(view), pending_buffer);
+            wpe_view_buffer_released(WPE_VIEW(view), pending_buffer);
+        } else if (!present_buffer(view, pending_buffer, &error)) {
             g_printerr("Fjord WPE pending frame failed: %s\n", error->message);
             g_clear_error(&error);
             wpe_view_buffer_rendered(WPE_VIEW(view), pending_buffer);
@@ -269,6 +279,11 @@ static gboolean fjord_wpe_view_render_buffer(
 
     (void)damage_rects;
     (void)damage_rect_count;
+    if (!view_is_active(view)) {
+        wpe_view_buffer_rendered(wpe_view, wpe_buffer);
+        wpe_view_buffer_released(wpe_view, wpe_buffer);
+        return TRUE;
+    }
     if (!view->frame_callback)
         return present_buffer(view, wpe_buffer, error);
 
@@ -306,7 +321,10 @@ static void fjord_wpe_view_constructed(GObject *object) {
 
 static void fjord_wpe_view_dispose(GObject *object) {
     FjordWpeView *view = (FjordWpeView *)object;
+    FjordWpeDisplay *display = (FjordWpeDisplay *)wpe_view_get_display(WPE_VIEW(view));
 
+    if (display->active_view == WPE_VIEW(view))
+        display->active_view = NULL;
     if (view->frame_callback) {
         wl_callback_destroy(view->frame_callback);
         view->frame_callback = NULL;
@@ -338,6 +356,8 @@ static WPEView *fjord_wpe_display_create_view(WPEDisplay *display) {
     FjordWpeView *view = g_object_new(fjord_wpe_view_get_type(), "display", display, NULL);
 
     view->config = fjord_display->config;
+    if (!fjord_display->active_view)
+        fjord_display->active_view = WPE_VIEW(view);
     return WPE_VIEW(view);
 }
 
@@ -405,4 +425,10 @@ WPEDisplay *fjord_wpe_display_new(
 void fjord_wpe_display_shutdown(WPEDisplay *display) {
     g_return_if_fail(display && G_TYPE_CHECK_INSTANCE_TYPE(display, fjord_wpe_display_get_type()));
     ((FjordWpeDisplay *)display)->shutting_down = TRUE;
+}
+
+void fjord_wpe_display_set_active_view(WPEDisplay *display, WPEView *view) {
+    g_return_if_fail(display && G_TYPE_CHECK_INSTANCE_TYPE(display, fjord_wpe_display_get_type()));
+    g_return_if_fail(WPE_IS_VIEW(view));
+    ((FjordWpeDisplay *)display)->active_view = view;
 }

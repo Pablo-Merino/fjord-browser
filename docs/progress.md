@@ -421,3 +421,20 @@ smoke continued rendering with matched key down/up counters after release.
 **Evidence:** `artifacts/reports/runs/gate2/gpui-smoke.txt`.
 
 **Next:** Exercise the two-tab swap gate through the custom platform view.
+
+## 2026-08-25: Three Live Custom-Platform Views
+
+**Changed:** The persistent bridge now keeps three WPE views alive on one shared
+child surface. Only the active view may present buffers or receive input.
+`Ctrl+Tab` hides the old view, shows the selected view, and leaves each page's
+state alive between switches. Each fixture has a distinct title and color.
+
+**Checks:** `./scripts/dev.sh verify` passed locally. Athena automated switching
+visited tabs 0, 1, and 2 repeatedly without a bridge failure. Frame counters
+continued from 119 to 148 rendered frames across the switches. Manual switching
+also passed without stale content or input loss.
+
+**Evidence:** `artifacts/reports/runs/gate2/gpui-smoke.txt`.
+
+**Next:** Capture reviewed screenshots for all three active views, then close
+the remaining Gate 2 evidence gap.

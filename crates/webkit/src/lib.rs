@@ -36,6 +36,11 @@ unsafe extern "C" {
         scale: u32,
         error_message: *mut *mut c_char,
     ) -> i32;
+    fn fjord_wpe_subsurface_bridge_switch_tab(
+        bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
+        tab: u32,
+        error_message: *mut *mut c_char,
+    ) -> i32;
     fn fjord_wpe_subsurface_bridge_pointer_button(
         bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
         pressed: bool,
@@ -152,6 +157,20 @@ impl WaylandSubsurfaceBridge {
                 scale,
                 &mut error_message,
             )
+        };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(take_error(error_message))
+        }
+    }
+
+    /// Select a live development tab.
+    pub fn switch_tab(&mut self, tab: u32) -> Result<(), String> {
+        let mut error_message = std::ptr::null_mut();
+        let result = unsafe {
+            fjord_wpe_subsurface_bridge_switch_tab(self.0.as_ptr(), tab, &mut error_message)
         };
 
         if result == 0 {

@@ -10,10 +10,13 @@ use xkbcommon::xkb::keysyms::{
     KEY_BackSpace, KEY_Down, KEY_Escape, KEY_Left, KEY_Return, KEY_Right, KEY_Tab, KEY_Up,
 };
 
+const TAB_COUNT: u32 = 3;
+
 struct Fjord {
     handles_logged: bool,
     bridge: Option<fjord_webkit::WaylandSubsurfaceBridge>,
     bridge_started: bool,
+    active_tab: u32,
     focus: FocusHandle,
     last_key_down: HashMap<String, Instant>,
 }
@@ -129,8 +132,13 @@ impl Fjord {
         &mut self,
         event: &KeyDownEvent,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        if switches_tab(&event.keystroke) {
+            self.switch_tab();
+            cx.stop_propagation();
+            return;
+        }
         if forwards_to_page(&event.keystroke)
             && let Some(keyval) = keyval(&event.keystroke)
         {
@@ -147,6 +155,17 @@ impl Fjord {
             if self.forward_key(true, keyval, modifiers) {
                 self.forward_key(false, keyval, modifiers);
             }
+        }
+    }
+
+    fn switch_tab(&mut self) {
+        let tab = (self.active_tab + 1) % TAB_COUNT;
+        if let Some(bridge) = &mut self.bridge {
+            if let Err(error) = bridge.switch_tab(tab) {
+                eprintln!("GPUI Wayland subsurface bridge tab switch failed: {error}");
+                return;
+            }
+            self.active_tab = tab;
         }
     }
 
@@ -196,6 +215,7 @@ fn main() {
                 handles_logged: false,
                 bridge: None,
                 bridge_started: false,
+                active_tab: 0,
                 focus,
                 last_key_down: HashMap::new(),
             })
@@ -208,6 +228,13 @@ fn main() {
 fn forwards_to_page(keystroke: &Keystroke) -> bool {
     (!keystroke.modifiers.control && !keystroke.modifiers.alt && !keystroke.modifiers.platform)
         || (keystroke.key == "backspace" && !keystroke.modifiers.platform)
+}
+
+fn switches_tab(keystroke: &Keystroke) -> bool {
+    keystroke.key == "tab"
+        && keystroke.modifiers.control
+        && !keystroke.modifiers.alt
+        && !keystroke.modifiers.platform
 }
 
 fn keyboard_modifiers(keystroke: &Keystroke) -> u32 {
@@ -252,7 +279,7 @@ fn keyval(keystroke: &Keystroke) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Keystroke, forwards_to_page, keyboard_modifiers, keyval};
+    use super::{Keystroke, forwards_to_page, keyboard_modifiers, keyval, switches_tab};
 
     #[test]
     fn maps_printable_and_editing_keys() {
@@ -265,5 +292,6 @@ mod tests {
         assert!(forwards_to_page(&control_backspace));
         assert_eq!(keyboard_modifiers(&control_backspace), 1);
         assert!(!forwards_to_page(&Keystroke::parse("ctrl-l").unwrap()));
+        assert!(switches_tab(&Keystroke::parse("ctrl-tab").unwrap()));
     }
 }

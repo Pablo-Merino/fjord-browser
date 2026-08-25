@@ -76,6 +76,12 @@ int fjord_wpe_subsurface_bridge_resize(
     char **error_message
 );
 
+int fjord_wpe_subsurface_bridge_switch_tab(
+    FjordWpeSubsurfaceBridge *bridge,
+    uint32_t tab,
+    char **error_message
+);
+
 int fjord_wpe_subsurface_bridge_pointer_button(
     FjordWpeSubsurfaceBridge *bridge,
     bool pressed,

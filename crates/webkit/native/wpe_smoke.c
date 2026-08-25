@@ -1025,6 +1025,8 @@ out:
     return !*error_message;
 }
 
+#define FJORD_BRIDGE_TAB_COUNT 3
+
 struct FjordWpeSubsurfaceBridge {
     struct wl_display *wayland_display;
     struct wl_surface *parent_surface;
@@ -1038,9 +1040,9 @@ struct FjordWpeSubsurfaceBridge {
     WPEDisplay *wpe_display;
     WebKitWebContext *web_context;
     WebKitNetworkSession *network_session;
-    WebKitWebView *web_view;
-    WPEView *view;
-    WPEToplevel *toplevel;
+    WebKitWebView *web_views[FJORD_BRIDGE_TAB_COUNT];
+    WPEView *views[FJORD_BRIDGE_TAB_COUNT];
+    WPEToplevel *toplevels[FJORD_BRIDGE_TAB_COUNT];
     char *profile;
     char *data_directory;
     char *cache_directory;
@@ -1062,6 +1064,8 @@ struct FjordWpeSubsurfaceBridge {
     guint scroll_events;
     guint keyboard_down_events;
     guint keyboard_up_events;
+    guint active_tab;
+    guint tab_switches;
 };
 
 static void bridge_trace(FjordWpeSubsurfaceBridge *bridge, const char *event);
@@ -1075,8 +1079,10 @@ static void bridge_fail(FjordWpeSubsurfaceBridge *bridge, const char *message) {
 
 static void bridge_trace(FjordWpeSubsurfaceBridge *bridge, const char *event) {
     g_printerr(
-        "Fjord bridge %s size=%ux%u@%u rendered=%u attached=%u released=%u frame_done=%u pointer=%u/%u scroll=%u key=%u/%u\n",
+        "Fjord bridge %s tab=%u switches=%u size=%ux%u@%u rendered=%u attached=%u released=%u frame_done=%u pointer=%u/%u scroll=%u key=%u/%u\n",
         event,
+        bridge->active_tab,
+        bridge->tab_switches,
         bridge->width,
         bridge->height,
         bridge->scale,
@@ -1122,23 +1128,53 @@ static void bridge_frame_event(gpointer data, FjordWpeFrameEvent event) {
 static void bridge_apply_resize(FjordWpeSubsurfaceBridge *bridge) {
     gint64 now;
 
-    if (!bridge->toplevel || !bridge->attached_frames ||
+    if (!bridge->toplevels[0] || !bridge->attached_frames ||
         (bridge->applied_width == bridge->width && bridge->applied_height == bridge->height &&
          bridge->applied_scale == bridge->scale))
         return;
     now = g_get_monotonic_time();
     if (bridge->scale == bridge->applied_scale && now - bridge->last_resize_time < 200000)
         return;
-    wpe_toplevel_scale_changed(bridge->toplevel, bridge->scale);
-    if (!wpe_toplevel_resize(bridge->toplevel, bridge->width, bridge->height)) {
-        bridge_fail(bridge, "failed to resize WPE bridge view");
-        return;
+    for (guint index = 0; index < FJORD_BRIDGE_TAB_COUNT; index++) {
+        wpe_toplevel_scale_changed(bridge->toplevels[index], bridge->scale);
+        if (!wpe_toplevel_resize(bridge->toplevels[index], bridge->width, bridge->height)) {
+            bridge_fail(bridge, "failed to resize WPE bridge view");
+            return;
+        }
     }
     bridge->applied_width = bridge->width;
     bridge->applied_height = bridge->height;
     bridge->applied_scale = bridge->scale;
     bridge->last_resize_time = now;
     bridge_trace(bridge, "resize");
+}
+
+static void bridge_load_fixture(FjordWpeSubsurfaceBridge *bridge, guint index) {
+    static const char *backgrounds[] = { "#0f172a", "#20142f", "#0f2f2b" };
+    static const char *accents[] = { "#38bdf8", "#c084fc", "#34d399" };
+    char *html = g_strdup_printf(
+        "<!doctype html><title>Fjord Tab %u</title>"
+        "<style>body{margin:0;font:16px sans-serif;min-height:2400px;background:%s;color:#e2e8f0}"
+        "main{max-width:680px;margin:48px auto;padding:24px;border:1px solid #334155;border-radius:12px;background:#111827}"
+        "button,input{font:inherit;padding:10px;margin:8px 0}button{background:%s;color:#082f49;border:0;border-radius:6px}"
+        "#log{white-space:pre-wrap;min-height:120px;padding:12px;background:#020617;border-radius:6px}</style>"
+        "<main><h1>Fjord Tab %u</h1><p>Type here, then use Ctrl+Tab to switch views.</p>"
+        "<button id=click>Click target</button><br><input id=text placeholder='Type here' autofocus>"
+        "<h2>Event log</h2><div id=log>ready</div></main>"
+        "<script>const log=document.querySelector('#log');let n=0;const entries=[];const show=x=>{entries.unshift(`${++n}: ${x}`);entries.length=20;log.textContent=entries.join('\\n')};"
+        "document.querySelector('#click').onclick=()=>show('click');document.querySelector('#text').oninput=e=>show(`text ${e.target.value}`);"
+        "document.addEventListener('keydown',e=>show(`key ${e.key}`));document.addEventListener('wheel',e=>show(`scroll ${Math.round(e.deltaY)}`));"
+        "window.addEventListener('scroll',()=>show(`page ${Math.round(scrollY)}`));</script>",
+        index + 1,
+        backgrounds[index],
+        accents[index],
+        index + 1
+    );
+    char *base_uri = g_strdup_printf("fjord-gate2://tab-%u/", index + 1);
+
+    webkit_web_view_load_html(bridge->web_views[index], html, base_uri);
+    g_free(base_uri);
+    g_free(html);
 }
 
 static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
@@ -1201,46 +1237,37 @@ static gboolean bridge_start(FjordWpeSubsurfaceBridge *bridge) {
         g_main_context_pop_thread_default(bridge->context);
         return FALSE;
     }
-    bridge->web_view = WEBKIT_WEB_VIEW(g_object_new(
-        WEBKIT_TYPE_WEB_VIEW,
-        "display", bridge->wpe_display,
-        "web-context", bridge->web_context,
-        "network-session", bridge->network_session,
-        NULL
-    ));
-    bridge->view = bridge->web_view ? webkit_web_view_get_wpe_view(bridge->web_view) : NULL;
-    bridge->toplevel = bridge->view ? wpe_view_get_toplevel(bridge->view) : NULL;
-    if (!bridge->view || !bridge->toplevel) {
-        bridge_fail(bridge, "failed to configure WPE bridge view");
-        g_main_context_pop_thread_default(bridge->context);
-        return FALSE;
+    for (guint index = 0; index < FJORD_BRIDGE_TAB_COUNT; index++) {
+        bridge->web_views[index] = WEBKIT_WEB_VIEW(g_object_new(
+            WEBKIT_TYPE_WEB_VIEW,
+            "display", bridge->wpe_display,
+            "web-context", bridge->web_context,
+            "network-session", bridge->network_session,
+            NULL
+        ));
+        bridge->views[index] = bridge->web_views[index] ?
+            webkit_web_view_get_wpe_view(bridge->web_views[index]) : NULL;
+        bridge->toplevels[index] = bridge->views[index] ?
+            wpe_view_get_toplevel(bridge->views[index]) : NULL;
+        if (!bridge->views[index] || !bridge->toplevels[index]) {
+            bridge_fail(bridge, "failed to configure WPE bridge view");
+            g_main_context_pop_thread_default(bridge->context);
+            return FALSE;
+        }
+        wpe_view_set_visible(bridge->views[index], index == bridge->active_tab);
+        wpe_toplevel_scale_changed(bridge->toplevels[index], bridge->scale);
+        if (!wpe_toplevel_resize(bridge->toplevels[index], bridge->width, bridge->height)) {
+            bridge_fail(bridge, "failed to configure WPE bridge view");
+            g_main_context_pop_thread_default(bridge->context);
+            return FALSE;
+        }
+        bridge_load_fixture(bridge, index);
     }
-    wpe_toplevel_scale_changed(bridge->toplevel, bridge->scale);
-    if (!wpe_toplevel_resize(bridge->toplevel, bridge->width, bridge->height)) {
-        bridge_fail(bridge, "failed to configure WPE bridge view");
-        g_main_context_pop_thread_default(bridge->context);
-        return FALSE;
-    }
+    fjord_wpe_display_set_active_view(bridge->wpe_display, bridge->views[bridge->active_tab]);
     bridge->applied_width = bridge->width;
     bridge->applied_height = bridge->height;
     bridge->applied_scale = bridge->scale;
     bridge->last_resize_time = g_get_monotonic_time();
-    webkit_web_view_load_html(
-        bridge->web_view,
-        "<!doctype html><title>Fjord Input Fixture</title>"
-        "<style>body{margin:0;font:16px sans-serif;min-height:2400px;background:#0f172a;color:#e2e8f0}"
-        "main{max-width:680px;margin:48px auto;padding:24px;border:1px solid #334155;border-radius:12px;background:#111827}"
-        "button,input{font:inherit;padding:10px;margin:8px 0}button{background:#38bdf8;color:#082f49;border:0;border-radius:6px}"
-        "#log{white-space:pre-wrap;min-height:120px;padding:12px;background:#020617;border-radius:6px}</style>"
-        "<main><h1>Fjord Input Fixture</h1><p>Click, type, use named keys, and scroll this page.</p>"
-        "<button id=click>Click target</button><br><input id=text placeholder='Type here' autofocus>"
-        "<h2>Event log</h2><div id=log>ready</div></main>"
-        "<script>const log=document.querySelector('#log');let n=0;const entries=[];const show=x=>{entries.unshift(`${++n}: ${x}`);entries.length=20;log.textContent=entries.join('\n')};"
-        "document.querySelector('#click').onclick=()=>show('click');document.querySelector('#text').oninput=e=>show(`text ${e.target.value}`);"
-        "document.addEventListener('keydown',e=>show(`key ${e.key}`));document.addEventListener('wheel',e=>show(`scroll ${Math.round(e.deltaY)}`));"
-        "window.addEventListener('scroll',()=>show(`page ${Math.round(scrollY)}`));</script>",
-        "fjord-gate2://bridge/"
-    );
     g_main_context_pop_thread_default(bridge->context);
     return TRUE;
 }
@@ -1350,6 +1377,39 @@ int fjord_wpe_subsurface_bridge_resize(
     return 0;
 }
 
+int fjord_wpe_subsurface_bridge_switch_tab(
+    FjordWpeSubsurfaceBridge *bridge,
+    uint32_t tab,
+    char **error_message
+) {
+    WPEView *old_view;
+
+    g_return_val_if_fail(bridge, 1);
+    g_return_val_if_fail(error_message, 1);
+    *error_message = NULL;
+    if (tab >= FJORD_BRIDGE_TAB_COUNT) {
+        *error_message = g_strdup("WPE bridge tab index is out of range");
+        return 1;
+    }
+    if (!bridge->views[tab]) {
+        *error_message = g_strdup("WPE bridge tab is not ready");
+        return 1;
+    }
+    if (tab == bridge->active_tab)
+        return 0;
+
+    old_view = bridge->views[bridge->active_tab];
+    wpe_view_focus_out(old_view);
+    wpe_view_set_visible(old_view, FALSE);
+    bridge->active_tab = tab;
+    bridge->pointer_entered = FALSE;
+    fjord_wpe_display_set_active_view(bridge->wpe_display, bridge->views[tab]);
+    wpe_view_set_visible(bridge->views[tab], TRUE);
+    bridge->tab_switches++;
+    bridge_trace(bridge, "tab-switch");
+    return 0;
+}
+
 int fjord_wpe_subsurface_bridge_pointer_button(
     FjordWpeSubsurfaceBridge *bridge,
     bool pressed,
@@ -1358,12 +1418,14 @@ int fjord_wpe_subsurface_bridge_pointer_button(
     char **error_message
 ) {
     WPEEvent *event;
+    WPEView *view;
     guint32 time;
 
     g_return_val_if_fail(bridge, 1);
     g_return_val_if_fail(error_message, 1);
     *error_message = NULL;
-    if (!bridge->view) {
+    view = bridge->views[bridge->active_tab];
+    if (!view) {
         *error_message = g_strdup("WPE bridge view is not ready for pointer input");
         return 1;
     }
@@ -1375,7 +1437,7 @@ int fjord_wpe_subsurface_bridge_pointer_button(
     if (!bridge->pointer_entered) {
         event = wpe_event_pointer_move_new(
             WPE_EVENT_POINTER_ENTER,
-            bridge->view,
+            view,
             WPE_INPUT_SOURCE_MOUSE,
             time,
             0,
@@ -1388,12 +1450,12 @@ int fjord_wpe_subsurface_bridge_pointer_button(
             *error_message = g_strdup("failed to create WPE pointer enter event");
             return 1;
         }
-        wpe_view_event(bridge->view, event);
+        wpe_view_event(view, event);
         wpe_event_unref(event);
         bridge->pointer_entered = TRUE;
     }
     if (pressed)
-        wpe_view_focus_in(bridge->view);
+        wpe_view_focus_in(view);
     if (pressed)
         bridge->pointer_down_events++;
     else
@@ -1401,20 +1463,20 @@ int fjord_wpe_subsurface_bridge_pointer_button(
 
     event = wpe_event_pointer_button_new(
         pressed ? WPE_EVENT_POINTER_DOWN : WPE_EVENT_POINTER_UP,
-        bridge->view,
+        view,
         WPE_INPUT_SOURCE_MOUSE,
         time,
         0,
         1,
         x,
         y,
-        pressed ? wpe_view_compute_press_count(bridge->view, x, y, 1, time) : 0
+        pressed ? wpe_view_compute_press_count(view, x, y, 1, time) : 0
     );
     if (!event) {
         *error_message = g_strdup("failed to create WPE pointer button event");
         return 1;
     }
-    wpe_view_event(bridge->view, event);
+    wpe_view_event(view, event);
     wpe_event_unref(event);
     bridge_trace_input(bridge);
     return 0;
@@ -1430,18 +1492,20 @@ int fjord_wpe_subsurface_bridge_scroll(
     char **error_message
 ) {
     WPEEvent *event;
+    WPEView *view;
 
     g_return_val_if_fail(bridge, 1);
     g_return_val_if_fail(error_message, 1);
     *error_message = NULL;
-    if (!bridge->view) {
+    view = bridge->views[bridge->active_tab];
+    if (!view) {
         *error_message = g_strdup("WPE bridge view is not ready for scroll input");
         return 1;
     }
     if (!bridge->pointer_entered) {
         event = wpe_event_pointer_move_new(
             WPE_EVENT_POINTER_ENTER,
-            bridge->view,
+            view,
             WPE_INPUT_SOURCE_MOUSE,
             (guint32)(g_get_monotonic_time() / 1000),
             0,
@@ -1454,18 +1518,18 @@ int fjord_wpe_subsurface_bridge_scroll(
             *error_message = g_strdup("failed to create WPE pointer enter event");
             return 1;
         }
-        wpe_view_event(bridge->view, event);
+        wpe_view_event(view, event);
         wpe_event_unref(event);
         bridge->pointer_entered = TRUE;
     }
-    wpe_view_focus_in(bridge->view);
+    wpe_view_focus_in(view);
     if (!isfinite(x) || !isfinite(y) || !isfinite(delta_x) || !isfinite(delta_y)) {
         *error_message = g_strdup("WPE bridge scroll values must be finite");
         return 1;
     }
 
     event = wpe_event_scroll_new(
-        bridge->view,
+        view,
         WPE_INPUT_SOURCE_MOUSE,
         (guint32)(g_get_monotonic_time() / 1000),
         0,
@@ -1480,7 +1544,7 @@ int fjord_wpe_subsurface_bridge_scroll(
         *error_message = g_strdup("failed to create WPE scroll event");
         return 1;
     }
-    wpe_view_event(bridge->view, event);
+    wpe_view_event(view, event);
     wpe_event_unref(event);
     bridge->scroll_events++;
     bridge_trace_input(bridge);
@@ -1495,11 +1559,13 @@ int fjord_wpe_subsurface_bridge_keyboard(
     char **error_message
 ) {
     WPEEvent *event;
+    WPEView *view;
 
     g_return_val_if_fail(bridge, 1);
     g_return_val_if_fail(error_message, 1);
     *error_message = NULL;
-    if (!bridge->view) {
+    view = bridge->views[bridge->active_tab];
+    if (!view) {
         *error_message = g_strdup("WPE bridge view is not ready for keyboard input");
         return 1;
     }
@@ -1507,11 +1573,11 @@ int fjord_wpe_subsurface_bridge_keyboard(
         *error_message = g_strdup("WPE bridge keyboard keyval must not be zero");
         return 1;
     }
-    wpe_view_focus_in(bridge->view);
+    wpe_view_focus_in(view);
 
     event = wpe_event_keyboard_new(
         pressed ? WPE_EVENT_KEYBOARD_KEY_DOWN : WPE_EVENT_KEYBOARD_KEY_UP,
-        bridge->view,
+        view,
         WPE_INPUT_SOURCE_KEYBOARD,
         (guint32)(g_get_monotonic_time() / 1000),
         (WPEModifiers)modifiers,
@@ -1522,7 +1588,7 @@ int fjord_wpe_subsurface_bridge_keyboard(
         *error_message = g_strdup("failed to create WPE keyboard event");
         return 1;
     }
-    wpe_view_event(bridge->view, event);
+    wpe_view_event(view, event);
     wpe_event_unref(event);
     if (pressed)
         bridge->keyboard_down_events++;
@@ -1537,8 +1603,10 @@ void fjord_wpe_subsurface_bridge_free(FjordWpeSubsurfaceBridge *bridge) {
         return;
     if (bridge->wpe_display)
         fjord_wpe_display_shutdown(bridge->wpe_display);
-    if (bridge->web_view)
-        g_object_unref(bridge->web_view);
+    for (guint index = 0; index < FJORD_BRIDGE_TAB_COUNT; index++) {
+        if (bridge->web_views[index])
+            g_object_unref(bridge->web_views[index]);
+    }
     if (bridge->network_session)
         g_object_unref(bridge->network_session);
     if (bridge->web_context)
