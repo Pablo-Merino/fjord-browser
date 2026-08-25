@@ -1482,6 +1482,50 @@ int fjord_wpe_subsurface_bridge_pointer_button(
     return 0;
 }
 
+int fjord_wpe_subsurface_bridge_pointer_move(
+    FjordWpeSubsurfaceBridge *bridge,
+    double x,
+    double y,
+    char **error_message
+) {
+    WPEEvent *event;
+    WPEView *view;
+    guint32 time;
+
+    g_return_val_if_fail(bridge, 1);
+    g_return_val_if_fail(error_message, 1);
+    *error_message = NULL;
+    view = bridge->views[bridge->active_tab];
+    if (!view) {
+        *error_message = g_strdup("WPE bridge view is not ready for pointer input");
+        return 1;
+    }
+    if (!isfinite(x) || !isfinite(y)) {
+        *error_message = g_strdup("WPE bridge pointer coordinates must be finite");
+        return 1;
+    }
+    time = (guint32)(g_get_monotonic_time() / 1000);
+    event = wpe_event_pointer_move_new(
+        bridge->pointer_entered ? WPE_EVENT_POINTER_MOVE : WPE_EVENT_POINTER_ENTER,
+        view,
+        WPE_INPUT_SOURCE_MOUSE,
+        time,
+        0,
+        x,
+        y,
+        0,
+        0
+    );
+    if (!event) {
+        *error_message = g_strdup("failed to create WPE pointer move event");
+        return 1;
+    }
+    wpe_view_event(view, event);
+    wpe_event_unref(event);
+    bridge->pointer_entered = TRUE;
+    return 0;
+}
+
 int fjord_wpe_subsurface_bridge_scroll(
     FjordWpeSubsurfaceBridge *bridge,
     double x,

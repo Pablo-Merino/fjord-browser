@@ -439,3 +439,27 @@ all three active fixtures at the correct size and color.
 `artifacts/screenshots/baselines/gate2-tab-{1,2,3}.png`.
 
 **Next:** Finish Gate 3 pointer movement, clipboard, and fcitx input work.
+
+## 2026-08-25: Active-View Pointer Movement
+
+**Changed:** GPUI mouse movement now forwards to the active WPE view. The first
+movement establishes pointer enter; later movement uses normal WPE pointer move
+events. Switching tabs resets pointer ownership before routing the next event.
+
+**Checks:** `./scripts/dev.sh verify` passed locally. Athena startup smoke
+passed. The Athena host has no virtual pointer tool, so hardware pointer-motion
+injection remains pending.
+
+**Next:** Add clipboard integration or run the fcitx laptop checklist.
+
+## 2026-08-25: Local WPE Clipboard
+
+**Changed:** The custom WPE display now exposes a local `WPEClipboard`. Standard
+page copy, cut, paste, and select-all shortcuts route to WPE with their control
+modifier, preserving local text, HTML, and image clipboard content across the
+three live views.
+
+**Checks:** `./scripts/dev.sh verify` passed locally.
+
+**Next:** Add a Wayland data-control backend for desktop clipboard exchange,
+then validate fcitx text input on the laptop.

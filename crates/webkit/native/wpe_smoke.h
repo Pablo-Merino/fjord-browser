@@ -90,6 +90,13 @@ int fjord_wpe_subsurface_bridge_pointer_button(
     char **error_message
 );
 
+int fjord_wpe_subsurface_bridge_pointer_move(
+    FjordWpeSubsurfaceBridge *bridge,
+    double x,
+    double y,
+    char **error_message
+);
+
 int fjord_wpe_subsurface_bridge_scroll(
     FjordWpeSubsurfaceBridge *bridge,
     double x,

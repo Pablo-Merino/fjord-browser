@@ -36,6 +36,7 @@ typedef struct _FjordWpeViewClass {
 typedef struct _FjordWpeDisplay {
     WPEDisplay parent_instance;
     WPEDisplay *device_display;
+    WPEClipboard *clipboard;
     FjordWpePlatformConfig config;
     WPEView *active_view;
     gboolean shutting_down;
@@ -374,9 +375,14 @@ static WPEDRMDevice *fjord_wpe_display_get_drm_device(WPEDisplay *display) {
     return wpe_display_get_drm_device(((FjordWpeDisplay *)display)->device_display);
 }
 
+static WPEClipboard *fjord_wpe_display_get_clipboard(WPEDisplay *display) {
+    return ((FjordWpeDisplay *)display)->clipboard;
+}
+
 static void fjord_wpe_display_dispose(GObject *object) {
     FjordWpeDisplay *display = (FjordWpeDisplay *)object;
 
+    g_clear_object(&display->clipboard);
     g_clear_object(&display->device_display);
     G_OBJECT_CLASS(fjord_wpe_display_parent_class)->dispose(object);
 }
@@ -391,10 +397,12 @@ static void fjord_wpe_display_class_init(FjordWpeDisplayClass *display_class) {
     wpe_display_class->create_toplevel = fjord_wpe_display_create_toplevel;
     wpe_display_class->get_egl_display = fjord_wpe_display_get_egl_display;
     wpe_display_class->get_drm_device = fjord_wpe_display_get_drm_device;
+    wpe_display_class->get_clipboard = fjord_wpe_display_get_clipboard;
 }
 
 static void fjord_wpe_display_init(FjordWpeDisplay *display) {
     display->device_display = wpe_display_headless_new();
+    display->clipboard = wpe_clipboard_new(WPE_DISPLAY(display));
     wpe_display_set_available_input_devices(
         WPE_DISPLAY(display),
         WPE_AVAILABLE_INPUT_DEVICE_MOUSE | WPE_AVAILABLE_INPUT_DEVICE_KEYBOARD

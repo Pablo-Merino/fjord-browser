@@ -48,6 +48,12 @@ unsafe extern "C" {
         y: f64,
         error_message: *mut *mut c_char,
     ) -> i32;
+    fn fjord_wpe_subsurface_bridge_pointer_move(
+        bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
+        x: f64,
+        y: f64,
+        error_message: *mut *mut c_char,
+    ) -> i32;
     fn fjord_wpe_subsurface_bridge_scroll(
         bridge: *mut FjordWpeSubsurfaceBridgeOpaque,
         x: f64,
@@ -195,6 +201,24 @@ impl WaylandSubsurfaceBridge {
                 y,
                 &mut error_message,
             )
+        };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(take_error(error_message))
+        }
+    }
+
+    /// Inject pointer movement at the view coordinates.
+    pub fn pointer_move(&mut self, x: f64, y: f64) -> Result<(), String> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err("WPE bridge pointer coordinates must be finite".into());
+        }
+
+        let mut error_message = std::ptr::null_mut();
+        let result = unsafe {
+            fjord_wpe_subsurface_bridge_pointer_move(self.0.as_ptr(), x, y, &mut error_message)
         };
 
         if result == 0 {

@@ -1,6 +1,7 @@
 use gpui::{
-    App, Context, FocusHandle, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseUpEvent,
-    Render, ScrollDelta, ScrollWheelEvent, Window, WindowOptions, div, prelude::*,
+    App, Context, FocusHandle, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Render, ScrollDelta, ScrollWheelEvent, Window, WindowOptions,
+    div, prelude::*,
 };
 use gpui_platform::application;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
@@ -69,6 +70,7 @@ impl Render for Fjord {
             .id("web-content")
             .size_full()
             .track_focus(&self.focus)
+            .on_mouse_move(cx.listener(Self::forward_pointer_move))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::forward_pointer_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::forward_pointer_up))
             .on_scroll_wheel(cx.listener(Self::forward_scroll))
@@ -85,6 +87,20 @@ impl Fjord {
     ) {
         window.focus(&self.focus, cx);
         self.forward_pointer_button(true, event.position.x.to_f64(), event.position.y.to_f64());
+    }
+
+    fn forward_pointer_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        if let Some(bridge) = &mut self.bridge
+            && let Err(error) =
+                bridge.pointer_move(event.position.x.to_f64(), event.position.y.to_f64())
+        {
+            eprintln!("GPUI Wayland subsurface bridge pointer forwarding failed: {error}");
+        }
     }
 
     fn forward_pointer_up(
@@ -229,6 +245,10 @@ fn main() {
 fn forwards_to_page(keystroke: &Keystroke) -> bool {
     (!keystroke.modifiers.control && !keystroke.modifiers.alt && !keystroke.modifiers.platform)
         || (keystroke.key == "backspace" && !keystroke.modifiers.platform)
+        || (keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && matches!(keystroke.key.as_str(), "a" | "c" | "v" | "x"))
 }
 
 fn switches_tab(keystroke: &Keystroke) -> bool {
@@ -294,5 +314,6 @@ mod tests {
         assert_eq!(keyboard_modifiers(&control_backspace), 1);
         assert!(!forwards_to_page(&Keystroke::parse("ctrl-l").unwrap()));
         assert!(switches_tab(&Keystroke::parse("ctrl-tab").unwrap()));
+        assert!(forwards_to_page(&Keystroke::parse("ctrl-v").unwrap()));
     }
 }
